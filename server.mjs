@@ -189,6 +189,12 @@ function safeProfileError(error) {
   };
 }
 
+// Infrastructure probes intentionally bypass operational logging and OAuth work.
+app.get('/healthz', (_request, response) => {
+  response.setHeader('Cache-Control', 'no-store');
+  response.status(204).end();
+});
+
 async function loadCallingProfile(session, source, request) {
   try {
     const person = await webexRequest(session, '/telephony/config/people/me');

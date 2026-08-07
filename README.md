@@ -243,7 +243,7 @@ Create a Render Web Service, not a Static Site.
 ```text
 Build command: npm ci && npm run build
 Start command: npm start
-Health check path: /api/oauth/status
+Health check path: /healthz
 ```
 
 Configure:
@@ -257,6 +257,8 @@ NODE_VERSION=22
 ```
 
 Register the same HTTPS redirect URI on the Webex Integration. Express binds to Render's `PORT` on `0.0.0.0`, terminates OAuth callbacks, proxies Calling REST requests, and serves the built Vite assets.
+
+`GET /healthz` returns HTTP 204 without reading OAuth state, invoking Webex APIs, or writing an operational log entry. Do not use `/api/oauth/status` as the infrastructure health check because it performs application-session work and records an OAuth status event.
 
 The free Render tier is unsuitable for an agent session that must remain available because idle spin-down destroys the current in-memory OAuth session. For a bounded POC test, use an always-on single instance or accept that OAuth must be repeated after a process restart. Production requires a durable encrypted session store.
 
