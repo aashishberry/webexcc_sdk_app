@@ -12,18 +12,18 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, st
 |---|---|
 | Authentication | Webex OAuth Authorization Code flow with PKCE and state validation |
 | OAuth storage | Client secret and refresh token remain on the Express server |
-| Agent identity | `/telephony/config/people/me` provides the display name and email mapping |
+| Agent identity | `/telephony/config/people/me` provides the display name shown in the console |
 | Station discovery | Contact Center extensions, available endpoints, and preferred answer endpoint are retrieved through Calling configuration APIs |
 | Contact Center startup | `@webex/contact-center` initialization, registration, team discovery, and extension station login |
-| Agent state | Available and configured non-system Idle reason selection |
+| Agent state | Available and configured non-system Idle reason selection, including next-state selection during an active call |
 | Incoming task | WxCC task events drive the interaction lifecycle |
 | Call association | The WxCC task is matched to an inbound Calling REST call; `interactionId` and `callId` are not expected to be equal |
 | Calling controls | Answer, decline, hold, resume, mute, unmute, DTMF, and hangup |
-| Contact Center controls | Pause/resume recording, consult, transfer, consult transfer, consult end, and wrap-up |
+| Contact Center controls | Pause/resume recording, consult, transfer, consult transfer, consult end, consult conference, conference exit, and wrap-up |
 | Endpoint preference | Optional persistence of the selected Webex Calling answer endpoint |
 | Refresh recovery | SDK automated relogin, station-state restoration, task hydration, and active Calling call reassociation |
 | Alerts | Web Audio ringtone and background operating-system notification with supported actions |
-| User interface | Responsive layout, system/light/dark themes, custom accessible selectors, banners, and agent diagnostics timeline |
+| User interface | One responsive desktop/mobile layout with icon-first call controls, consult and conference participant views, system/light/dark themes, custom accessible selectors, banners, and diagnostics |
 | Logging | Structured backend lifecycle and action logs with allowlisted, non-PII browser diagnostics |
 
 ## Technology
@@ -37,6 +37,8 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, st
 - Vitest, Testing Library, and ESLint
 
 Node.js 22 is recommended for local and hosted execution.
+
+The Contact Center dependency is loaded only when initialization starts. This keeps the initial authentication and setup bundle substantially smaller while deferring the SDK cost to the point at which it is required.
 
 ## Webex integration configuration
 
@@ -119,9 +121,12 @@ npm start
 8. Route a Webex Contact Center voice interaction to the agent.
 9. Confirm that the task is associated with one Calling REST call.
 10. Answer or decline the call.
-11. Use Calling and Contact Center controls as applicable.
-12. End the call and submit a wrap-up reason when required.
-13. Use the dedicated Logout action for ordered cleanup.
+11. During a connected call, optionally select the Available or Idle reason that should follow the interaction.
+12. Use Calling and Contact Center controls as applicable.
+13. Start a consultation, then end it, complete the transfer, or merge it into a three-party conference.
+14. From a conference, inspect participants or exit and leave the customer connected to the consulted party.
+15. End the call and submit a wrap-up reason when required.
+16. Use the dedicated Logout action for ordered cleanup.
 
 ## Control ownership
 
@@ -129,7 +134,7 @@ npm start
 |---|---|---|
 | Contact Center initialization | Contact Center SDK | `Webex.init`, ready event, and `cc.register()` |
 | Station login/logout | Contact Center SDK | Extension login and ordered station cleanup |
-| Available/Idle | Contact Center SDK | Agent-state APIs and configured auxiliary codes |
+| Available/Idle | Contact Center SDK | Agent-state APIs and configured auxiliary codes; the selector remains available during connected calls to establish the agent's following state |
 | Answer | Calling REST | Answers on the selected endpoint, or the primary-device fallback |
 | Decline | Calling REST | Ends the alerting Calling leg with `hangup`; the local offered-task view clears immediately |
 | Hold/resume | Calling REST | Uses the active Calling `callId` |
@@ -138,7 +143,11 @@ npm start
 | Hangup | Calling REST | Ends the active Calling leg |
 | Recording pause/resume | Contact Center SDK task | Available only when the interaction advertises pause/resume capability |
 | Consult/transfer | Contact Center SDK task | Uses eligible agents and telephony queues returned by the SDK |
+| Consult conference | Contact Center SDK task | `consultConference()` merges the held customer and consulted destination into a three-party conference |
+| Conference exit | Contact Center SDK task | `exitConference()` removes the current agent and leaves the other conference parties connected |
 | Wrap-up | Contact Center SDK task | Uses configured wrap-up codes after the task enters wrap-up |
+
+The installed Contact Center task API does not expose an operation for the current agent to remove an arbitrary remote conference participant. The participant-management view therefore displays known parties but keeps Drop unavailable. This must not be enabled unless a supported tenant/API capability is identified and validated.
 
 ## Station and endpoint selection
 
@@ -226,7 +235,7 @@ The server emits one-line JSON records suitable for Render log streams. Covered 
 - Server startup
 - OAuth authorization, callback, status, and logout
 - Calling profile and station-configuration discovery
-- Contact Center initialization, station login, state, task, recording, consult, transfer, wrap-up, and logout
+- Contact Center initialization, station login, state, task, recording, consult, conference, transfer, wrap-up, and logout
 - Calling call-control start, success, failure, action, and duration
 - Calling API and polling failures
 

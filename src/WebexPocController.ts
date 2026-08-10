@@ -1,4 +1,4 @@
-import Webex, {type ITask, type Profile} from '@webex/contact-center';
+import type {ITask, Profile} from '@webex/contact-center';
 import {selectIncomingCall, selectRecoverableCall} from './callMatching';
 import {CallingApiClient, type CallingRestCall} from './callingApi';
 import {reportBackendEvent} from './backendDiagnostics';
@@ -133,6 +133,7 @@ export class WebexPocController {
     );
 
     try {
+      const {default: Webex} = await import('@webex/contact-center');
       const WebexSdk = Webex as unknown as WebexInitializer;
       this.webex = WebexSdk.init({
         credentials: {access_token: options.accessToken.trim()},
@@ -444,6 +445,34 @@ export class WebexPocController {
     }
   }
 
+  async startConference(): Promise<void> {
+    if (!this.task || !this.snapshot.consultActive) {
+      throw new Error('An active consultation is required.');
+    }
+    try {
+      await this.task.consultConference();
+      this.update({consultActive: false, conferenceActive: true});
+      this.log('Consultation merged into a conference.', 'success');
+      reportBackendEvent('cc.conference', 'succeeded', {action: 'start'});
+    } catch (error) {
+      reportBackendEvent('cc.conference', 'failed', {action: 'start'});
+      this.fail('Starting conference failed', error);
+    }
+  }
+
+  async exitConference(): Promise<void> {
+    if (!this.task || !this.snapshot.conferenceActive) throw new Error('No active conference.');
+    try {
+      await this.task.exitConference();
+      this.update({conferenceActive: false, consultActive: false});
+      this.log('Agent exited the conference.', 'success');
+      reportBackendEvent('cc.conference', 'succeeded', {action: 'exit'});
+    } catch (error) {
+      reportBackendEvent('cc.conference', 'failed', {action: 'exit'});
+      this.fail('Exiting conference failed', error);
+    }
+  }
+
   async endConsult(): Promise<void> {
     if (!this.task || !this.snapshot.consultActive) throw new Error('No active consultation.');
     try {
@@ -545,6 +574,7 @@ export class WebexPocController {
         recordingPauseCapable: recordingPauseEnabled(task),
         recordingPaused: false,
         consultActive: false,
+        conferenceActive: false,
         consultDestinationName: '',
         destinations: [],
         destinationsLoaded: false,
@@ -587,7 +617,8 @@ export class WebexPocController {
       recordingPauseCapable: recordingPauseEnabled(task),
       recordingPaused: recordingPaused(task),
       held: callStatus === 'held',
-      consultActive: Boolean(data.isConsulted || data.isConferencing || data.isConferenceInProgress),
+      consultActive: Boolean(data.isConsulted) && !(data.isConferencing || data.isConferenceInProgress),
+      conferenceActive: Boolean(data.isConferencing || data.isConferenceInProgress),
       error: '',
     });
     this.log(`WxCC task hydrated after session recovery (${state || 'active'}).`, 'success');
@@ -611,6 +642,12 @@ export class WebexPocController {
     task.on('task:consulting', () => this.update({consultActive: true}));
     task.on('task:consultEnd', () =>
       this.update({consultActive: false, consultDestinationName: ''}),
+    );
+    task.on('task:conferenceStarted', () =>
+      this.update({consultActive: false, conferenceActive: true}),
+    );
+    task.on('task:conferenceEnded', () =>
+      this.update({consultActive: false, conferenceActive: false}),
     );
     task.on('task:wrapup', () => {
       this.update({callStatus: 'wrap-up'});
@@ -773,6 +810,7 @@ export class WebexPocController {
       recordingPaused: false,
       recordingPauseCapable: false,
       consultActive: false,
+      conferenceActive: false,
       consultDestinationName: '',
       destinations: [],
       destinationsLoaded: false,

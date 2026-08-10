@@ -32,20 +32,11 @@ export interface OAuthStatus {
   accessToken: string;
   profile: {
     displayName: string;
-    email: string;
   };
   profileError?: {
     status: number;
     code?: string;
   };
-  profileLookup: {
-    attempted: boolean;
-    ok: boolean;
-    hasDisplayName?: boolean;
-    hasEmail?: boolean;
-  };
-  profileMappingVersion: number;
-  scopes: string;
 }
 
 export interface ContactCenterExtension {
@@ -77,11 +68,6 @@ export interface AnswerEndpoint {
   status?: 'CONNECTED' | 'NOT_CONNECTED' | string;
 }
 
-export interface PreferredEndpointResponse {
-  preferred?: AnswerEndpoint & {preferredAnswerEndpointId?: string};
-  available?: {endpoints?: AnswerEndpoint[]} | AnswerEndpoint[];
-}
-
 export interface StationConfigurationResponse {
   extensions: ContactCenterExtensionsResponse;
   preferred?: AnswerEndpoint;
@@ -111,10 +97,6 @@ export function logoutOAuth(): Promise<void> {
   return requestJson<void>('/api/oauth/logout', {method: 'POST'});
 }
 
-export function getContactCenterExtensions(): Promise<ContactCenterExtensionsResponse> {
-  return requestJson<ContactCenterExtensionsResponse>('/api/calling/contact-center-extensions');
-}
-
 export function getStationConfiguration(): Promise<StationConfigurationResponse> {
   return requestJson<StationConfigurationResponse>('/api/calling/station-configuration');
 }
@@ -133,10 +115,6 @@ export class CallingApiClient {
     );
     if (Array.isArray(payload)) return payload;
     return payload.items ?? [];
-  }
-
-  getPreferredEndpoint(): Promise<PreferredEndpointResponse> {
-    return requestJson<PreferredEndpointResponse>('/api/calling/preferred-endpoint');
   }
 
   action(

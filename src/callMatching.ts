@@ -1,6 +1,6 @@
 import type {CallingRestCall} from './callingApi';
 
-export type CallMatchResult =
+type CallMatchResult =
   | {kind: 'matched'; call: CallingRestCall}
   | {kind: 'none'}
   | {kind: 'ambiguous'; candidates: CallingRestCall[]};

@@ -6,7 +6,7 @@ The application provides a consolidated agent interface for Webex Contact Center
 
 The design separates interaction control from media control:
 
-- Webex Contact Center owns agent registration, station state, routing tasks, recording, transfer, consult, and wrap-up.
+- Webex Contact Center owns agent registration, station state, routing tasks, recording, consult, conference, transfer, and wrap-up.
 - Webex Calling owns the call presented to Webex App and exposes REST controls for that call.
 - Webex App remains the registered endpoint and carries audio.
 - The browser coordinates both systems but does not become a media endpoint.
@@ -40,8 +40,8 @@ The Contact Center SDK connects directly from the browser to Webex services. Cal
 
 | Component | Responsibilities |
 |---|---|
-| `App.tsx` | Workflow composition, form state, responsive UI, banners, menus, theme and alert controls |
-| `WebexPocController.ts` | Contact Center lifecycle, task events, state machine, Calling call association, polling, and action coordination |
+| `App.tsx` | Workflow composition, form state, one responsive desktop/mobile UI, in-call next-state selection, consult/conference participant views, banners, menus, theme and alert controls |
+| `WebexPocController.ts` | Contact Center lifecycle, task and conference events, state machine, Calling call association, polling, and action coordination |
 | `server.mjs` | OAuth, token refresh, HTTP-only session cookie, Calling API proxy, diagnostics ingestion, static hosting |
 | `callingApi.ts` | Typed same-origin client for server routes |
 | `stationConfiguration.ts` | Extension and endpoint normalization and selection policy |
@@ -50,6 +50,8 @@ The Contact Center SDK connects directly from the browser to Webex services. Cal
 | `useCallAlerts.ts` | Ringtone, notification permission, visibility behavior, and service-worker messages |
 | `call-alert-sw.js` | Notification click/action delivery to an existing browser client |
 | `backendDiagnostics.ts` | Fire-and-forget delivery of allowlisted Contact Center lifecycle events to the server |
+
+The Contact Center package is dynamically imported by the controller during initialization. Authentication and station-setup UI can load without downloading and evaluating the full SDK bundle first.
 
 ## 4. Trust boundaries
 
@@ -240,7 +242,43 @@ These operations execute directly through the SDK:
 - Recording pause and resume
 - Queue and buddy-agent discovery
 - Consult, transfer, consult transfer, and consult end
+- Consult conference and conference exit
 - Wrap-up
+
+### Consult and conference path
+
+```mermaid
+sequenceDiagram
+    participant A as Agent UI
+    participant C as Controller
+    participant T as Contact Center task
+    participant W as Contact Center services
+
+    A->>C: Select destination and start consult
+    C->>T: consult(holdParticipants: true)
+    T->>W: Create consultation leg
+    W-->>T: task:consultCreated / task:consulting
+    T-->>C: Consultation active
+    C-->>A: Customer held, destination connected
+    alt End consultation
+        A->>C: End consult
+        C->>T: endConsult()
+    else Complete transfer
+        A->>C: Complete transfer
+        C->>T: consultTransfer()
+    else Start conference
+        A->>C: Conference
+        C->>T: consultConference()
+        W-->>T: task:conferenceStarted
+        T-->>C: Conference active
+        C-->>A: Three participants connected
+        A->>C: Leave conference
+        C->>T: exitConference()
+        W-->>T: task:conferenceEnded
+    end
+```
+
+`exitConference()` removes the current agent and leaves the customer and consulted party connected. The installed task API does not expose arbitrary remote-participant removal, so the UI presents participant identity and status without enabling Drop.
 
 ## 10. Controller state model
 
@@ -282,7 +320,22 @@ ambiguous
 
 Contact Center task events remain authoritative for wrap-up. Calling polling cannot overwrite `wrap-up` with `ended`.
 
-## 11. Refresh recovery
+Consultation and conference are orthogonal task modes rather than additional Calling REST states:
+
+```text
+consultActive
+conferenceActive
+```
+
+`task:consultCreated`, `task:consulting`, and `task:consultEnd` update consultation state. `task:conferenceStarted` and `task:conferenceEnded` update conference state. During refresh hydration, `isConsulted`, `isConferencing`, and `isConferenceInProgress` restore these modes.
+
+## 11. Responsive UI state
+
+Desktop and mobile use the same React component tree, controller snapshot, and action handlers. CSS breakpoints reflow the top bar, state selector, call-control grid, consult actions, conference controls, and participant rows; there is no separate mobile application or duplicate SDK session.
+
+The active-interaction heading contains an `After this call` selector. It is available for `connected` and `held` interactions, including consult and conference modes, and is disabled while ringing, answering, wrapping up, or executing another action. Selecting a value invokes the normal Contact Center agent-state API; Webex Contact Center remains authoritative for the resulting agent-state event.
+
+## 12. Refresh recovery
 
 ```mermaid
 sequenceDiagram
@@ -310,7 +363,9 @@ The SDK and backend are authoritative. Stored browser data is only a signal to a
 
 If `isAgentLoggedIn` is false, the UI returns to station login without creating a replacement station. If SDK initialization fails, the error is displayed and no cleanup request is sent automatically.
 
-## 12. Notification architecture
+Conference hydration restores the conference mode before Calling-call reassociation. Known participant labels are reconstructed from the agent, caller, and consulted-destination state available to the POC; this is not a complete conference roster service.
+
+## 13. Notification architecture
 
 The alert feature is local to the browser and does not use a push subscription.
 
@@ -324,7 +379,7 @@ The alert feature is local to the browser and does not use a push subscription.
 
 If no client exists, selecting the notification body can open the application, but an action cannot reconstruct an expired SDK task or server session. Full closed-browser support would require Web Push or another server-initiated notification channel plus secure action authorization.
 
-## 13. Operational logging
+## 14. Operational logging
 
 ### Server-native events
 
@@ -357,7 +412,9 @@ The endpoint requires a valid session and same-origin request. Event name, outco
 
 Operational logs deliberately exclude PII, credentials, Webex identifiers, DTMF digits, and routing destinations. The agent-visible timeline is a separate POC diagnostic surface and may contain interaction-specific values.
 
-## 14. Failure behavior
+Conference start and exit report the allowlisted `cc.conference` diagnostic event with only the `action` value (`start` or `exit`) and outcome. Participant identity is not sent to backend diagnostics.
+
+## 15. Failure behavior
 
 | Failure | Behavior |
 |---|---|
@@ -373,11 +430,14 @@ Operational logs deliberately exclude PII, credentials, Webex identifiers, DTMF 
 | Calling control failure | State is preserved or restored and a server error event is recorded |
 | Calling leg disappears | Two missing polls mark media ended unless Contact Center is already in wrap-up |
 | Declined offer | Calling leg is ended and the local task view is cleared immediately |
+| Conference start failure | Consultation remains visible and the error is presented in the application banner |
+| Conference exit failure | Conference state remains active and the agent can retry |
+| Participant removal requested | UI keeps the action disabled because no supported task method is exposed |
 | Wrap-up required | Contact Center task remains active until a wrap-up code succeeds |
 | Refresh with valid backend session | Station, agent state, task, and Calling association are restored |
 | Refresh without backend session | UI returns to station login |
 
-## 15. Deployment topology
+## 16. Deployment topology
 
 The current deployment unit is one Node.js process:
 
@@ -394,7 +454,7 @@ The process binds to `0.0.0.0` and the `PORT` supplied by the platform. A single
 
 Infrastructure health checks use `GET /healthz`. The endpoint returns HTTP 204 without accessing OAuth sessions, calling Webex services, or generating an operational log. `/api/oauth/status` is an application endpoint and must not be used for platform health polling.
 
-## 16. Production evolution
+## 17. Production evolution
 
 The minimum production architecture should add:
 

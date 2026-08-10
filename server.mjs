@@ -26,6 +26,9 @@ const scopes =
   ].join(' ');
 const sessionCookie = 'wxcc_rest_session';
 const sessions = new Map();
+const oauthAttemptTtlMs = 10 * 60 * 1000;
+const sessionIdleTtlMs = 90 * 24 * 60 * 60 * 1000;
+let lastSessionPruneAt = 0;
 
 const app = express();
 app.disable('x-powered-by');
@@ -63,9 +66,23 @@ function clearSessionCookie(response) {
   );
 }
 
+function pruneSessions(now = Date.now()) {
+  if (now - lastSessionPruneAt < 5 * 60 * 1000) return;
+  lastSessionPruneAt = now;
+  for (const [id, session] of sessions) {
+    const referenceTime = session.lastSeenAt || session.createdAt || 0;
+    const ttl = session.accessToken ? sessionIdleTtlMs : oauthAttemptTtlMs;
+    if (now - referenceTime > ttl) sessions.delete(id);
+  }
+}
+
 function getSession(request) {
+  const now = Date.now();
+  pruneSessions(now);
   const id = cookieValue(request, sessionCookie);
-  return id ? {id, value: sessions.get(id)} : undefined;
+  const value = id ? sessions.get(id) : undefined;
+  if (value) value.lastSeenAt = now;
+  return id ? {id, value} : undefined;
 }
 
 function sessionReference(request) {
@@ -110,7 +127,13 @@ function requireSession(request, response, next) {
 
 function requireSameOrigin(request, response, next) {
   const origin = request.headers.origin;
-  if (origin && new URL(origin).host !== request.headers.host) {
+  let validOrigin = true;
+  try {
+    validOrigin = !origin || new URL(origin).host === request.headers.host;
+  } catch {
+    validOrigin = false;
+  }
+  if (!validOrigin) {
     logServer('warn', 'security.origin_rejected', request);
     response.status(403).json({message: 'Cross-origin call-control requests are not allowed.'});
     return;
@@ -204,25 +227,17 @@ async function loadCallingProfile(session, source, request) {
       person?.name ||
       person?.email ||
       '';
-    const email = person?.email || person?.emails?.[0] || '';
-    session.profile = {displayName, email};
+    session.profile = {displayName};
+    session.profileLoadedAt = Date.now();
     session.profileError = undefined;
-    session.profileLookup = {
-      attempted: true,
-      ok: true,
-      hasDisplayName: Boolean(displayName),
-      hasEmail: Boolean(email),
-    };
     logServer('info', 'calling.profile', request, {
       outcome: 'succeeded',
       source,
-      hasDisplayName: session.profileLookup.hasDisplayName,
-      hasEmail: session.profileLookup.hasEmail,
+      hasDisplayName: Boolean(displayName),
     });
   } catch (error) {
-    session.profile ??= {displayName: '', email: ''};
+    session.profile ??= {displayName: ''};
     session.profileError = safeProfileError(error);
-    session.profileLookup = {attempted: true, ok: false};
     logServer('warn', 'calling.profile', request, {
       outcome: 'failed',
       source,
@@ -234,7 +249,8 @@ async function loadCallingProfile(session, source, request) {
 
 app.get('/api/oauth/status', async (request, response) => {
   const session = getSession(request)?.value;
-  if (session?.accessToken) {
+  const profileIsFresh = session?.profileLoadedAt && Date.now() - session.profileLoadedAt < 5 * 60 * 1000;
+  if (session?.accessToken && !profileIsFresh) {
     await loadCallingProfile(session, 'oauth-status', request);
   }
   logServer('info', 'oauth.status', request, {
@@ -246,11 +262,8 @@ app.get('/api/oauth/status', async (request, response) => {
     configured: Boolean(clientId && clientSecret),
     authenticated: Boolean(session?.accessToken),
     accessToken: session?.accessToken || '',
-    profile: session?.profile || {displayName: '', email: ''},
+    profile: session?.profile || {displayName: ''},
     profileError: session?.profileError,
-    profileLookup: session?.profileLookup || {attempted: false, ok: false},
-    profileMappingVersion: 2,
-    scopes,
   });
 });
 
@@ -265,7 +278,7 @@ app.get('/api/oauth/login', (request, response) => {
   const state = base64url(crypto.randomBytes(24));
   const verifier = base64url(crypto.randomBytes(64));
   const challenge = base64url(crypto.createHash('sha256').update(verifier).digest());
-  sessions.set(id, {state, verifier, createdAt: Date.now()});
+  sessions.set(id, {state, verifier, createdAt: Date.now(), lastSeenAt: Date.now()});
   setSessionCookie(response, id);
   logServer('info', 'oauth.authorization', request, {outcome: 'started'});
 
@@ -314,9 +327,9 @@ app.get('/api/oauth/callback', async (request, response) => {
       state: undefined,
       verifier: undefined,
     });
-    session.value.profile = {displayName: '', email: ''};
+    session.value.profile = {displayName: ''};
+    session.value.profileLoadedAt = undefined;
     session.value.profileError = undefined;
-    session.value.profileLookup = {attempted: false, ok: false};
     logServer('info', 'oauth.callback', request, {outcome: 'succeeded'});
     response.redirect('/?oauth=success');
   } catch (error) {
@@ -342,43 +355,6 @@ app.get('/api/calling/calls', requireSession, async (request, response) => {
     response.json(await webexRequest(request.webexSession.value, '/telephony/calls'));
   } catch (error) {
     sendApiError(response, error, request, 'calling.calls_list');
-  }
-});
-
-app.get('/api/calling/preferred-endpoint', requireSession, async (request, response) => {
-  try {
-    const [preferred, available] = await Promise.all([
-      webexRequest(
-        request.webexSession.value,
-        '/telephony/config/people/me/settings/preferredAnswerEndpoint',
-      ),
-      webexRequest(
-        request.webexSession.value,
-        '/telephony/config/people/me/settings/availablePreferredAnswerEndpoints',
-      ),
-    ]);
-    response.json({preferred, available});
-    logServer('info', 'calling.preferred_endpoint', request, {
-      outcome: 'succeeded',
-      availableCount: Array.isArray(available) ? available.length : available?.endpoints?.length || 0,
-    });
-  } catch (error) {
-    sendApiError(response, error, request, 'calling.preferred_endpoint');
-  }
-});
-
-app.get('/api/calling/contact-center-extensions', requireSession, async (request, response) => {
-  try {
-    response.setHeader('Cache-Control', 'no-store');
-    response.json(
-      await webexRequest(
-        request.webexSession.value,
-        '/telephony/config/people/me/settings/contactCenterExtensions',
-      ),
-    );
-    logServer('info', 'calling.extensions', request, {outcome: 'succeeded'});
-  } catch (error) {
-    sendApiError(response, error, request, 'calling.extensions');
   }
 });
 
@@ -521,6 +497,7 @@ const diagnosticEvents = new Set([
   'cc.transfer',
   'cc.consult_transfer',
   'cc.consult_end',
+  'cc.conference',
   'cc.wrapup',
   'cc.logout',
 ]);
@@ -544,7 +521,9 @@ app.post('/api/diagnostics/events', requireSameOrigin, requireSession, (request,
     safeDetails.taskCount = details.taskCount;
   }
   if (diagnosticStates.has(details.state)) safeDetails.state = details.state;
-  if (['pause', 'resume'].includes(details.action)) safeDetails.action = details.action;
+  if (['pause', 'resume', 'start', 'exit'].includes(details.action)) {
+    safeDetails.action = details.action;
+  }
   if (['agent', 'queue'].includes(details.destinationType)) {
     safeDetails.destinationType = details.destinationType;
   }

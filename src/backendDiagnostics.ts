@@ -1,4 +1,4 @@
-export type DiagnosticOutcome = 'started' | 'succeeded' | 'failed' | 'observed';
+type DiagnosticOutcome = 'started' | 'succeeded' | 'failed' | 'observed';
 
 export function reportBackendEvent(
   event: string,

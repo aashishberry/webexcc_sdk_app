@@ -3,13 +3,13 @@ import type {InitializeOptions, LifecycleStatus} from './types';
 
 const STORAGE_KEY = 'webex-agent-console:recovery:v1';
 
-export interface RecoveryIntent {
+interface RecoveryIntent {
   version: 1;
   extension: string;
   answerEndpoint?: InitializeOptions['answerEndpoint'];
 }
 
-export interface RecoveredAgentSession {
+interface RecoveredAgentSession {
   loggedIn: boolean;
   lifecycle: LifecycleStatus;
   agentState: string;

@@ -61,6 +61,7 @@ export interface ControllerSnapshot {
   recordingPaused: boolean;
   recordingPauseCapable: boolean;
   consultActive: boolean;
+  conferenceActive: boolean;
   consultDestinationName: string;
   destinations: CallDestination[];
   destinationsLoaded: boolean;
@@ -107,6 +108,7 @@ export const initialSnapshot: ControllerSnapshot = {
   recordingPaused: false,
   recordingPauseCapable: false,
   consultActive: false,
+  conferenceActive: false,
   consultDestinationName: '',
   destinations: [],
   destinationsLoaded: false,

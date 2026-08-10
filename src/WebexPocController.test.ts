@@ -168,4 +168,37 @@ describe('WebexPocController call controls', () => {
     expect(resumeRecording).toHaveBeenCalledWith({autoResumed: false});
     expect(controller.getSnapshot().recordingPaused).toBe(false);
   });
+
+  it('merges an active consultation into a conference', async () => {
+    const controller = new WebexPocController();
+    const consultConference = vi.fn(async () => undefined);
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = {consultConference} as unknown as ITask;
+    internal.update({consultActive: true, conferenceActive: false});
+
+    await controller.startConference();
+
+    expect(consultConference).toHaveBeenCalledOnce();
+    expect(controller.getSnapshot().consultActive).toBe(false);
+    expect(controller.getSnapshot().conferenceActive).toBe(true);
+  });
+
+  it('exits an active conference through the Contact Center task', async () => {
+    const controller = new WebexPocController();
+    const exitConference = vi.fn(async () => undefined);
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = {exitConference} as unknown as ITask;
+    internal.update({conferenceActive: true});
+
+    await controller.exitConference();
+
+    expect(exitConference).toHaveBeenCalledOnce();
+    expect(controller.getSnapshot().conferenceActive).toBe(false);
+  });
 });

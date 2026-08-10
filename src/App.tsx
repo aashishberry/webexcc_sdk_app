@@ -61,6 +61,7 @@ export function App() {
   const [routeMode, setRouteMode] = useState<'consult' | 'transfer' | ''>('');
   const [routeCallId, setRouteCallId] = useState('');
   const [destinationId, setDestinationId] = useState('');
+  const [participantsOpen, setParticipantsOpen] = useState(false);
   const [banner, setBanner] = useState<{kind: 'error'; message: string}>();
   const [form, setForm] = useState<InitializeOptions>({accessToken: '', extension: ''});
   const recoveryAttempted = useRef(false);
@@ -176,6 +177,8 @@ export function App() {
     ['ringing', 'answering', 'connected', 'held', 'wrap-up'].includes(snapshot.callStatus);
   const hasCall = snapshot.callStatus !== 'none';
   const wrapupActive = snapshot.callStatus === 'wrap-up';
+  const stateChangeDisabled =
+    busy !== '' || wrapupActive || ['ringing', 'answering'].includes(snapshot.callStatus);
   const selectedTeam = snapshot.teams.find((team) => team.id === snapshot.selectedTeamId);
   const headerStatus = sessionStatus(snapshot.lifecycle, snapshot.agentState);
   const extensionOptions = configuredExtensions(callingConfiguration);
@@ -233,7 +236,7 @@ export function App() {
     group: destination.type === 'agent' ? 'Agents' : 'Queues',
   }));
   const topbarSubtitle = !initialized
-    ? 'Contact Center + Calling REST controls'
+    ? 'Contact Center + Calling controls'
     : `Extension ${snapshot.extension}${stationLoggedIn && selectedTeam ? ` · ${selectedTeam.name}` : ''}`;
 
   const selectExtension = (extension: string) => {
@@ -286,7 +289,7 @@ export function App() {
             ...current,
             authenticated: false,
             accessToken: '',
-            profile: {displayName: '', email: ''},
+            profile: {displayName: ''},
           }
         : current,
     );
@@ -298,6 +301,7 @@ export function App() {
     setRouteMode('');
     setRouteCallId('');
     setDestinationId('');
+    setParticipantsOpen(false);
     setForm({accessToken: '', extension: ''});
   };
 
@@ -373,7 +377,7 @@ export function App() {
           </button>
           <button
             type="button"
-            className="topbar-tool"
+            className={`topbar-tool ${theme.mode === 'system' ? 'is-active' : ''}`}
             title={`Theme: ${theme.mode}. Change theme`}
             onClick={theme.cycle}
           >
@@ -536,16 +540,26 @@ export function App() {
             </>
           ) : (
             <>
-              <div className="panel-heading workspace-heading">
+              <div className={`panel-heading workspace-heading ${activeInteraction ? 'interaction-heading' : ''}`}>
                 <div>
                   <p className="section-kicker">Agent workspace</p>
-                  <h2>{wrapupActive ? 'Wrap up interaction' : 'Agent controls'}</h2>
+                  <h2>
+                    {wrapupActive
+                      ? 'Wrap up interaction'
+                      : snapshot.conferenceActive
+                        ? 'Conference call'
+                        : snapshot.consultActive
+                          ? 'Consultation'
+                          : hasCall
+                            ? 'Active interaction'
+                            : 'Agent controls'}
+                  </h2>
                 </div>
                 <label className="state-selector">
-                  Agent state
+                  {activeInteraction && !wrapupActive ? 'After this call' : 'Agent state'}
                   <SelectMenu
                     ariaLabel="Agent state"
-                    disabled={activeInteraction || busy !== ''}
+                    disabled={stateChangeDisabled}
                     value={
                       snapshot.agentState === 'Available'
                         ? 'available'
@@ -582,20 +596,28 @@ export function App() {
                   <div className={`call-card call-${snapshot.callStatus}`}>
                     <div className="avatar">{snapshot.callerName.charAt(0) || 'W'}</div>
                     <div className="caller-copy">
+                      <span className="call-state">
+                        {snapshot.conferenceActive
+                          ? 'Conference'
+                          : snapshot.consultActive
+                            ? 'Consultation'
+                            : snapshot.callStatus}
+                      </span>
                       <strong>{snapshot.callerName || 'Contact Center caller'}</strong>
                       <span>{snapshot.callerNumber || 'Number unavailable'}</span>
                     </div>
-                    <span className="call-state">{snapshot.callStatus}</span>
+                    <span className={`association association-${snapshot.callKind}`}>
+                      {associationLabel(snapshot.callKind)}
+                    </span>
                   </div>
 
-                  <div className={`association association-${snapshot.callKind}`}>
-                    {associationLabel(snapshot.callKind)}
-                  </div>
-
-                  <div className="id-grid">
-                    <div><span>WxCC interactionId</span><code title={snapshot.interactionId}>{snapshot.interactionId || '—'}</code></div>
-                    <div><span>Calling callId</span><code title={snapshot.callId}>{snapshot.callId || '—'}</code></div>
-                  </div>
+                  <details className="call-metadata">
+                    <summary>Interaction details</summary>
+                    <div className="id-grid">
+                      <div><span>WxCC interactionId</span><code title={snapshot.interactionId}>{snapshot.interactionId || '—'}</code></div>
+                      <div><span>Calling callId</span><code title={snapshot.callId}>{snapshot.callId || '—'}</code></div>
+                    </div>
+                  </details>
 
                   {wrapupActive ? (
                     <div className="wrapup-panel">
@@ -685,19 +707,20 @@ export function App() {
                           <small>{snapshot.recordingPaused ? 'Resume rec.' : 'Pause rec.'}</small>
                         </button>
                         <button
-                          className={`phone-control ${activeRouteMode === 'consult' || snapshot.consultActive ? 'active' : ''}`}
+                          className={`phone-control ${activeRouteMode === 'consult' || snapshot.consultActive || snapshot.conferenceActive ? 'active' : ''}`}
                           disabled={busy !== '' || snapshot.consultActive}
                           onClick={() => {
                             setDialpadCallId('');
-                            void openRoutePanel('consult');
+                            if (snapshot.conferenceActive) setParticipantsOpen((open) => !open);
+                            else void openRoutePanel('consult');
                           }}
                         >
-                          <span><ControlIcon name="consult" /></span>
-                          <small>Consult</small>
+                          <span><ControlIcon name={snapshot.conferenceActive ? 'participants' : 'consult'} /></span>
+                          <small>{snapshot.conferenceActive ? 'Participants' : 'Consult'}</small>
                         </button>
                         <button
                           className={`phone-control ${activeRouteMode === 'transfer' ? 'active' : ''}`}
-                          disabled={busy !== '' || snapshot.consultActive}
+                          disabled={busy !== '' || snapshot.consultActive || snapshot.conferenceActive}
                           onClick={() => {
                             setDialpadCallId('');
                             void openRoutePanel('transfer');
@@ -760,11 +783,69 @@ export function App() {
 
                       {snapshot.consultActive && (
                         <div className="consult-session">
-                          <div><strong>Consultation active</strong><span>{snapshot.consultDestinationName || 'Connected destination'}</span></div>
-                          <div>
-                            <button className="button secondary" disabled={busy !== ''} onClick={() => run('end-consult', () => controller.endConsult())}>End consult</button>
-                            <button className="button primary" disabled={busy !== ''} onClick={() => run('consult-transfer', () => controller.completeConsultTransfer())}>Complete transfer</button>
+                          <div className="consult-heading">
+                            <div><span className="section-kicker">Consultation</span><strong>Private conversation connected</strong></div>
+                            <span className="live-chip"><i />Connected</span>
                           </div>
+                          <div className="participant-list">
+                            <div className="participant-row">
+                              <span className="participant-avatar">{snapshot.callerName.charAt(0) || 'C'}</span>
+                              <div><strong>{snapshot.callerName || 'Customer'}</strong><span>{snapshot.callerNumber || 'Contact Center caller'} · On hold</span></div>
+                              <span className="held-chip">Held</span>
+                            </div>
+                            <div className="participant-row">
+                              <span className="participant-avatar">{snapshot.consultDestinationName.charAt(0) || 'A'}</span>
+                              <div><strong>{snapshot.consultDestinationName || 'Connected destination'}</strong><span>Consult destination</span></div>
+                              <span className="connected-chip">Connected</span>
+                            </div>
+                          </div>
+                          <div className="consult-action-row">
+                            <button className="button secondary" disabled={busy !== ''} onClick={() => run('end-consult', () => controller.endConsult())}>
+                              End consult
+                            </button>
+                            <button className="button conference-button" disabled={busy !== ''} onClick={() => {
+                              setParticipantsOpen(false);
+                              void run('conference', () => controller.startConference());
+                            }}>
+                              <ControlIcon name="conference" /> Conference
+                            </button>
+                            <button className="button primary" disabled={busy !== ''} onClick={() => run('consult-transfer', () => controller.completeConsultTransfer())}>
+                              Complete transfer
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {snapshot.conferenceActive && (
+                        <div className="conference-session">
+                          <div className="consult-heading">
+                            <div><span className="section-kicker">Conference</span><strong>Everyone is connected</strong></div>
+                            <span className="live-chip"><i />3 participants</span>
+                          </div>
+                          <div className="conference-people" aria-label="Conference participants">
+                            <div><span className="participant-avatar">{snapshot.agentName.charAt(0) || 'Y'}</span><strong>You</strong><small>Host</small></div>
+                            <div><span className="participant-avatar">{snapshot.callerName.charAt(0) || 'C'}</span><strong>{snapshot.callerName || 'Customer'}</strong><small>Connected</small></div>
+                            <div><span className="participant-avatar speaking-avatar">{snapshot.consultDestinationName.charAt(0) || 'A'}</span><strong>{snapshot.consultDestinationName || 'Consulted agent'}</strong><small>Connected</small></div>
+                          </div>
+                          <div className="conference-actions">
+                            <button className="button secondary" disabled={busy !== ''} aria-expanded={participantsOpen} onClick={() => setParticipantsOpen((open) => !open)}>
+                              <ControlIcon name="participants" /> {participantsOpen ? 'Hide participants' : 'Manage participants'}
+                            </button>
+                            <button className="button primary" disabled={busy !== ''} onClick={() => void run('exit-conference', async () => {
+                              await controller.exitConference();
+                              setParticipantsOpen(false);
+                            })}>
+                              Leave conference
+                            </button>
+                          </div>
+                          {participantsOpen && (
+                            <div className="participant-manager">
+                              <div className="participant-row"><span className="participant-avatar">{snapshot.agentName.charAt(0) || 'Y'}</span><div><strong>You</strong><span>Conference host</span></div><span className="neutral-chip">Host</span></div>
+                              <div className="participant-row"><span className="participant-avatar">{snapshot.callerName.charAt(0) || 'C'}</span><div><strong>{snapshot.callerName || 'Customer'}</strong><span>{snapshot.callerNumber || 'Connected caller'}</span></div></div>
+                              <div className="participant-row"><span className="participant-avatar">{snapshot.consultDestinationName.charAt(0) || 'A'}</span><div><strong>{snapshot.consultDestinationName || 'Consulted agent'}</strong><span>Consulted participant</span></div><button type="button" className="drop-participant" disabled title="The current Contact Center SDK does not expose participant removal.">Drop</button></div>
+                              <p className="participant-api-note">Participant removal is not available through the current Contact Center task API.</p>
+                            </div>
+                          )}
                         </div>
                       )}
 
