@@ -47,8 +47,9 @@ The Contact Center SDK connects directly from the browser to Webex services, rou
 
 | Component | Responsibilities |
 |---|---|
-| `App.tsx` | Workflow composition, profile-driven station-mode selection, WebRTC permission and remote-audio binding, one responsive desktop/mobile UI, in-call next-state selection, consult/conference views, banners, menus, theme and alert controls |
-| `WebexPocController.ts` | Contact Center lifecycle, three-mode station login, native task controls, browser media events, task and conference events, state machine, and action coordination |
+| `App.tsx` | Workflow composition, profile-driven station-mode selection, WebRTC permission and remote-audio binding, responsive lifecycle stage, persistent state control, call-control dock, consult/conference views, banners, theme, alerts, and diagnostics drawer |
+| `InteractionInsights.tsx` | Interaction context, historic/live transcript presentation, real-time AI assistance and feedback, and mid-call/post-call summary presentation |
+| `WebexPocController.ts` | Contact Center lifecycle, three-mode station login, native task controls, browser media events, interaction context and participant normalization, AI Assistant events, task state machine, and action coordination |
 | `server.mjs` | OAuth, token refresh, HTTP-only session cookie, Calling configuration proxy, diagnostics ingestion, static hosting |
 | `callingApi.ts` | Typed same-origin client for server routes |
 | `stationConfiguration.ts` | Extension and endpoint normalization and selection policy |
@@ -59,7 +60,7 @@ The Contact Center SDK connects directly from the browser to Webex services, rou
 
 The Contact Center package is dynamically imported by the controller during initialization. Authentication and station-setup UI can load without downloading and evaluating the full SDK bundle first.
 
-The POC pins `@webex/contact-center` to `3.12.0-next.116` because the stable `3.12.0` package does not contain this task-based Webex App control path. The prerelease currently requires a local metrics declaration resolution in `tsconfig.app.json` and a narrow `consultTransfer()` task type augmentation; both are compatibility measures, not runtime forks of the SDK.
+The application pins `@webex/contact-center` to `3.12.0-next.116` because the stable `3.12.0` package does not contain this task-based Webex App control path. The prerelease currently requires a local metrics declaration resolution in `tsconfig.app.json` and a narrow `consultTransfer()` task type augmentation; both are compatibility measures, not runtime forks of the SDK.
 
 ## 4. Trust boundaries
 
@@ -112,7 +113,7 @@ flowchart TB
 - Derived user profile fields
 - Integration client ID and client secret
 
-The POC uses an in-memory `Map`; server-held session data is not durable.
+The current server uses an in-memory `Map`; server-held session data is not durable.
 
 ## 5. OAuth sequence
 
@@ -221,7 +222,8 @@ No browser-side Calling `callId` is required. The SDK derives Webex App device i
 
 The UI treats the SDK task as the single source of truth for the active interaction:
 
-- `task.uiControls.main` determines whether answer, decline, hold, mute, keypad, and end are enabled.
+- `task.uiControls.main` determines whether answer, decline, consult, transfer, and main-leg operations are enabled.
+- `task.uiControls.activeLeg` selects the capability set for hold, mute, keypad, call-leg switching, conference, consult transfer, consult end, conference exit, and conference handoff.
 - `task:ui-controls-updated` refreshes capability state.
 - `task:assigned`, `task:hold`, and `task:resume` determine the connected and held presentation.
 - `task:wxapp-mute-state-updated` synchronizes Webex App mute state.
@@ -261,7 +263,9 @@ These operations execute directly through the SDK:
 - Queue and buddy-agent discovery
 - Consult, transfer, consult transfer, and consult end
 - Consult conference and conference exit
+- Consult-leg switching, conference handoff, and participant removal
 - Wrap-up
+- Historic/live transcripts, real-time assistance and feedback, and summary requests through `cc.apiAIAssistant`
 
 The controller initializes `cc.enableWxBetterTogether: true`, reads `task.uiControls` for action availability, listens for `task:ui-controls-updated`, synchronizes Webex App mute from `task:wxapp-mute-state-updated`, and forwards browser remote audio from `task:media`. The internal SDK helper names are not called by the application.
 
@@ -280,6 +284,10 @@ sequenceDiagram
     W-->>T: task:consultCreated / task:consulting
     T-->>C: Consultation active
     C-->>A: Customer held, destination connected
+    opt Switch active leg
+        A->>C: Switch call
+        C->>T: switchCall()
+    end
     alt End consultation
         A->>C: End consult
         C->>T: endConsult()
@@ -292,13 +300,21 @@ sequenceDiagram
         W-->>T: task:conferenceStarted
         T-->>C: Conference active
         C-->>A: Three participants connected
-        A->>C: Leave conference
-        C->>T: exitConference()
-        W-->>T: task:conferenceEnded
+        alt Drop a participant
+            A->>C: Select authoritative participant
+            C->>T: dropConferenceParticipant()
+        else Hand over conference
+            A->>C: Hand over conference
+            C->>T: transferConference()
+        else Leave conference
+            A->>C: Leave conference
+            C->>T: exitConference()
+            W-->>T: task:conferenceEnded
+        end
     end
 ```
 
-`exitConference()` removes the current agent and leaves the customer and consulted party connected. The prerelease also exposes `dropConferenceParticipant({participantId})`, but the POC currently reconstructs display-only participant rows without retaining authoritative SDK participant IDs. Drop therefore remains disabled until that roster mapping and its task-state capability are implemented and validated.
+`exitConference()` removes the current agent and leaves the customer and consulted party connected. Participant removal is enabled only for non-host participant rows backed by authoritative IDs in the SDK task participant map. Fallback display rows remain non-actionable.
 
 ## 10. Controller state model
 
@@ -346,7 +362,11 @@ Desktop and mobile use the same React component tree, controller snapshot, and a
 
 Station setup deliberately has two progressive views rather than a persistent stepper. OAuth completion leads to one Contact Center connection action. After registration, the UI displays three recognizable connection cards and only the fields relevant to the selected mode. Unsupported profile modes remain visible but disabled so agents understand that the capability is controlled by their assigned profile rather than missing from the application.
 
-The active-interaction heading contains an `After this call` selector. It is available for `connected` and `held` interactions, including consult and conference modes, and is disabled while ringing, answering, wrapping up, or executing another action. Selecting a value invokes the normal Contact Center agent-state API; Webex Contact Center remains authoritative for the resulting agent-state event.
+The top bar contains a persistent agent-state selector and time-in-state display. It remains available for connected and held interactions, including consult and conference modes, and is disabled while ringing, answering, wrapping up, or executing another action. Selecting a value invokes the normal Contact Center agent-state API; Webex Contact Center remains authoritative for the resulting agent-state event.
+
+The active interaction uses a two-column desktop layout: the call lifecycle and stable control dock are the primary stage, while Context, Transcript, Assist, and Summary occupy a companion panel. At tablet and mobile breakpoints the same components stack vertically. There is no separate mobile application, SDK instance, or navigation rail.
+
+Reporting is an optional provider boundary. The controller snapshot may carry `AgentPerformanceSummary`, but the UI does not render sample values. A future backend may populate it through GraphQL Search only when an appropriately scoped Administrator or Supervisor service identity is configured; ordinary agent authorization does not silently broaden into reporting access.
 
 ## 12. Refresh recovery
 
@@ -372,7 +392,7 @@ The SDK and backend are authoritative. Stored browser data is only a signal to a
 
 If `isAgentLoggedIn` is false, the UI returns to station login without creating a replacement station. If SDK initialization fails, the error is displayed and no cleanup request is sent automatically.
 
-Conference hydration restores the conference mode from the task. Known participant labels are reconstructed from the agent, caller, and consulted-destination state available to the POC; this is not a complete conference roster service.
+Conference hydration restores the conference mode from the task. Authoritative participant records are normalized from task data; temporary display rows are reconstructed only until that SDK data arrives.
 
 ## 13. Notification architecture
 
@@ -418,7 +438,7 @@ The endpoint requires a valid session and same-origin request. Event name, outco
 }
 ```
 
-Operational logs deliberately exclude PII, credentials, Webex identifiers, DTMF digits, and routing destinations. The agent-visible timeline is a separate POC diagnostic surface and may contain interaction-specific values.
+Operational logs deliberately exclude PII, credentials, Webex identifiers, DTMF digits, and routing destinations. The agent-visible timeline is a separate diagnostic surface and may contain interaction-specific values.
 
 Conference start and exit report the allowlisted `cc.conference` diagnostic event with only the `action` value (`start` or `exit`) and outcome. Participant identity is not sent to backend diagnostics.
 

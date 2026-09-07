@@ -1,4 +1,4 @@
-# Webex Contact Center Agent Console POC
+# Webex Contact Center Agent Console
 
 This project implements a single responsive agent console for Webex Contact Center with three profile-controlled voice connection modes:
 
@@ -26,10 +26,12 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, st
 | Native Webex App controls | Contact Center task UI capabilities and methods drive answer, decline, mute, unmute, and DTMF without browser call-ID matching |
 | Native voice controls | Contact Center task capabilities and methods drive answer, decline, hold, resume, mute, unmute, DTMF, and end without browser call-ID matching or polling |
 | Contact Center controls | Pause/resume recording, consult, transfer, consult transfer, consult end, consult conference, conference exit, and wrap-up |
+| Consult and conference orchestration | SDK capability-gated call-leg switching, consult completion, conference handoff, and participant removal using authoritative participant IDs when supplied |
+| Agent assistance | Live and recovered transcripts, real-time assistance requests and feedback, and mid-call/post-call summary requests through `apiAIAssistant` |
 | Endpoint preference | Optional persistence of the selected Webex Calling answer endpoint |
 | Refresh recovery | SDK automated relogin, station-state restoration, and task hydration |
 | Alerts | Web Audio ringtone and background operating-system notification with supported actions |
-| User interface | One responsive desktop/mobile layout with connection cards, context-specific station configuration, icon-first call controls, consult and conference views, system/light/dark themes, custom accessible selectors, banners, and diagnostics |
+| User interface | One responsive desktop/mobile lifecycle workspace with a persistent state timer, stable call-control dock, interaction context and AI panel, system/light/dark themes, accessible selectors, banners, and a diagnostics drawer |
 | Logging | Structured backend lifecycle and action logs with allowlisted, non-PII browser diagnostics |
 
 ## Technology
@@ -130,8 +132,10 @@ npm start
 7. Complete station login.
 8. Change agent state to Available and handle the interaction with the task controls.
 9. During a connected call, optionally select the Available or Idle reason that should follow the interaction.
-10. Start a consultation, then end it, complete the transfer, or merge it into a three-party conference.
-11. End the call, submit a wrap-up reason when required, and use Logout for ordered cleanup.
+10. Use Context, Transcript, Assist, and Summary without leaving the active interaction.
+11. Start a consultation, switch between call legs, end it, complete the transfer, or merge it into a conference.
+12. During a conference, manage participants or hand the conference over when the SDK enables those controls.
+13. End the call, submit a wrap-up reason when required, and use Logout for ordered cleanup.
 
 ## Control ownership
 
@@ -149,10 +153,27 @@ npm start
 | Recording pause/resume | Contact Center SDK task | Available only when the interaction advertises pause/resume capability |
 | Consult/transfer | Contact Center SDK task | Uses eligible agents and telephony queues returned by the SDK |
 | Consult conference | Contact Center SDK task | `consultConference()` merges the held customer and consulted destination into a three-party conference |
+| Switch consult leg | Contact Center SDK task | `switchCall()` changes the active main/consult leg when the active leg exposes the switch control |
+| Conference participant removal | Contact Center SDK task | `dropConferenceParticipant({participantId})`, enabled only for authoritative participant IDs returned by task data |
+| Conference handoff | Contact Center SDK task | `transferConference()`, gated by the active task UI control |
 | Conference exit | Contact Center SDK task | `exitConference()` removes the current agent and leaves the other conference parties connected |
 | Wrap-up | Contact Center SDK task | Uses configured wrap-up codes after the task enters wrap-up |
+| Transcript and AI assistance | Contact Center SDK AI Assistant | Historic and live transcripts, suggested responses, user-action feedback, and summary requests remain interaction-scoped |
 
-The prerelease exposes `task.dropConferenceParticipant({participantId})`, but the POC participant view currently uses reconstructed display rows rather than authoritative SDK participant IDs. Drop remains unavailable until the conference roster is mapped to those IDs and the control is validated against the task state.
+Conference rows are reconstructed only while the SDK participant map is unavailable. Reconstructed rows cannot be removed. As soon as task data supplies authoritative participant IDs, the console enables participant removal for non-host participants and delegates the action to `task.dropConferenceParticipant()`.
+
+## Interaction insights and AI
+
+The active interaction opens a companion panel with four views:
+
+- Context: caller identity plus queue, reason, IVR path, entry point, and language when supplied by task data.
+- Transcript: historic transcript recovery after hydration and live transcript events during the conversation.
+- Assist: `getRealTimeAssistance()` requests, suggested responses, copy action, and helpful/not-helpful feedback.
+- Summary: mid-call and post-call requests through the AI Assistant event API.
+
+The UI renders empty states when the tenant, agent profile, or interaction does not enable an AI capability. It does not invent transcript, summary, queue, or performance values.
+
+`AgentPerformanceSummary` is retained as an optional snapshot boundary for a future server-side reporting provider. Queue Statistics is not embedded in the core agent path. GraphQL Search normally requires administrator or supervisor authorization (`cjp:config` or `cjp:config_read` plus the required role), so agent metrics must remain hidden unless a separately authorized backend provider supplies them.
 
 ## Station modes and endpoint selection
 
@@ -282,7 +303,7 @@ Contact Center SDK actions occur directly in the browser. The browser reports al
 
 Logs exclude tokens, names, email addresses, phone numbers, endpoint IDs, team IDs, interaction IDs, call IDs, DTMF digits, and destination IDs. A request ID and short SHA-256-derived session reference provide correlation without recording the session cookie.
 
-The Webex browser logger is configured at `error`. Application browser-console output is limited to actionable failures. The in-app diagnostics timeline is separate and may contain interaction-specific identifiers required for POC troubleshooting.
+The Webex browser logger is configured at `error`. Application browser-console output is limited to actionable failures. The in-app diagnostics timeline is separate and may contain interaction-specific identifiers required for live troubleshooting.
 
 ## Render deployment
 
@@ -308,7 +329,7 @@ Register the same HTTPS redirect URI on the Webex Integration. Express binds to 
 
 `GET /healthz` returns HTTP 204 without reading OAuth state, invoking Webex APIs, or writing an operational log entry. Do not use `/api/oauth/status` as the infrastructure health check because it performs application-session work and records an OAuth status event.
 
-The free Render tier is unsuitable for an agent session that must remain available because idle spin-down destroys the current in-memory OAuth session. For a bounded POC test, use an always-on single instance or accept that OAuth must be repeated after a process restart. Production requires a durable encrypted session store.
+The free Render tier is unsuitable for an agent session that must remain available because idle spin-down destroys the current in-memory OAuth session. For bounded evaluation, use an always-on single instance or accept that OAuth must be repeated after a process restart. Production requires a durable encrypted session store.
 
 ## Security and production limitations
 

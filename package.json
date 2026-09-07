@@ -1,6 +1,6 @@
 {
-  "name": "webex-cc-calling-poc",
-  "version": "0.1.0",
+  "name": "webex-agent-console",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {

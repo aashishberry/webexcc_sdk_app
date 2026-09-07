@@ -18,6 +18,7 @@ import {SelectMenu, type SelectMenuOption} from './SelectMenu';
 import {ControlIcon} from './ControlIcon';
 import {useCallAlerts} from './useCallAlerts';
 import {useTheme} from './useTheme';
+import {InteractionInsights} from './InteractionInsights';
 import {clearRecoveryIntent, readRecoveryIntent, saveRecoveryIntent} from './sessionRecovery';
 import type {
   InitializeOptions,
@@ -27,6 +28,12 @@ import type {
 } from './types';
 
 const digits = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
+
+function formatElapsed(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+}
 
 function sessionStatus(
   lifecycle: LifecycleStatus,
@@ -67,10 +74,17 @@ export function App() {
   const [routeTaskId, setRouteTaskId] = useState('');
   const [destinationId, setDestinationId] = useState('');
   const [participantsOpen, setParticipantsOpen] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [clock, setClock] = useState(0);
   const [banner, setBanner] = useState<{kind: 'error'; message: string}>();
   const [form, setForm] = useState<InitializeOptions>({accessToken: ''});
   const recoveryAttempted = useRef(false);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     void getOAuthStatus()
@@ -82,7 +96,7 @@ export function App() {
         }
       })
       .catch((error) => {
-        console.error('[webex-poc] OAuth status request failed.');
+        console.error('[webex-agent-console] OAuth status request failed.');
         setOAuthError(error instanceof Error ? error.message : String(error));
       });
   }, []);
@@ -102,7 +116,7 @@ export function App() {
       })
       .catch((error) => {
         if (!cancelled) {
-          console.error('[webex-poc] Station configuration request failed.');
+          console.error('[webex-agent-console] Station configuration request failed.');
           setCallingConfigurationError(error instanceof Error ? error.message : String(error));
         }
       });
@@ -119,7 +133,7 @@ export function App() {
       : null;
     if (snapshot.remoteAudioTrack) {
       void audio.play().catch(() => {
-        console.error('[webex-poc] Browser call audio playback was blocked.');
+        console.error('[webex-agent-console] Browser call audio playback was blocked.');
         setBanner({
           kind: 'error',
           message: 'Caller audio was blocked by the browser. Allow audio playback for this site and retry.',
@@ -167,7 +181,7 @@ export function App() {
           answerEndpoint: recoveredMode === 'EXTENSION' ? intent.answerEndpoint : undefined,
         });
       } catch (error) {
-        console.error('[webex-poc] Contact Center session recovery failed.');
+        console.error('[webex-agent-console] Contact Center session recovery failed.');
         setBanner({
           kind: 'error',
           message: `The previous session could not be restored. Check the station settings and initialize again. ${
@@ -326,6 +340,22 @@ export function App() {
     : `${stationLoggedIn ? stationConnectionLabel : 'Contact Center ready'}${
         stationLoggedIn && selectedTeam ? ` · ${selectedTeam.name}` : ''
       }`;
+  const stateValue = snapshot.agentState === 'Available'
+    ? 'available'
+    : snapshot.selectedIdleCode
+      ? `idle:${snapshot.selectedIdleCode}`
+      : 'idle';
+  const stateElapsed = clock && snapshot.stateChangedAt ? formatElapsed(clock - snapshot.stateChangedAt) : '0:00';
+  const callElapsed = clock && snapshot.callStartedAt ? formatElapsed(clock - snapshot.callStartedAt) : '0:00';
+  const displayParticipants = snapshot.participants.length
+    ? snapshot.participants
+    : [
+        {id: 'agent', name: snapshot.agentName || 'You', type: 'Agent', state: 'Connected', held: false, isCurrentAgent: true},
+        {id: 'customer', name: snapshot.callerName || 'Customer', type: 'Customer', state: snapshot.held ? 'Held' : 'Connected', held: snapshot.held, isCurrentAgent: false},
+        ...(snapshot.consultDestinationName
+          ? [{id: 'consult', name: snapshot.consultDestinationName, type: 'Agent', state: 'Connected', held: false, isCurrentAgent: false}]
+          : []),
+      ];
 
   const selectExtension = (extension: string) => {
     const configuration = callingConfiguration;
@@ -455,7 +485,7 @@ export function App() {
           <p className="eyebrow">Webex Contact Center</p>
           <h1>Agent Console</h1>
           <p>
-            Sign in to authorize Contact Center widgets and Webex Calling call controls.
+            Sign in with Webex to load your Contact Center profile, teams, and voice options.
           </p>
           {!oauth.configured && (
             <div className="notice error-notice">
@@ -492,7 +522,28 @@ export function App() {
           </div>
         </div>
         <div className="session-actions">
-          <span className={`agent-presence ${headerStatus.className}`}>{headerStatus.label}</span>
+          {stationLoggedIn ? (
+            <div className={`state-pill ${snapshot.agentState === 'Available' ? 'is-available' : 'is-idle'}`}>
+              <span className="state-dot" aria-hidden="true" />
+              <SelectMenu
+                ariaLabel="Agent state"
+                className="state-pill-select"
+                disabled={stateChangeDisabled}
+                value={stateValue}
+                options={stateMenuOptions}
+                onChange={(value) => {
+                  void run('agent-state', () =>
+                    value === 'available'
+                      ? controller.setAvailable()
+                      : controller.setIdle(value.replace(/^idle:/, '')),
+                  );
+                }}
+              />
+              <time title="Time in current state">{stateElapsed}</time>
+            </div>
+          ) : (
+            <span className={`agent-presence ${headerStatus.className}`}>{headerStatus.label}</span>
+          )}
           <button
             type="button"
             className={`topbar-tool ${callAlerts.enabled ? 'is-active' : ''}`}
@@ -524,6 +575,16 @@ export function App() {
             <span>{theme.mode === 'system' ? 'Auto' : theme.mode}</span>
           </button>
           <button
+            type="button"
+            className={`topbar-tool ${diagnosticsOpen ? 'is-active' : ''}`}
+            aria-pressed={diagnosticsOpen}
+            title="Runtime diagnostics"
+            onClick={() => setDiagnosticsOpen((open) => !open)}
+          >
+            <ControlIcon name="activity" />
+            <span>Diagnostics</span>
+          </button>
+          <button
             className="button logout-button"
             disabled={activeInteraction || busy !== ''}
             onClick={() => run('logout', logout)}
@@ -541,7 +602,7 @@ export function App() {
         </div>
       )}
 
-      <div className="console-layout">
+      <div className={`console-layout ${stationLoggedIn && activeInteraction ? 'has-insights' : ''}`}>
         <section className="panel flow-panel">
           {!stationLoggedIn ? (
             <>
@@ -753,7 +814,7 @@ export function App() {
             <>
               <div className={`panel-heading workspace-heading ${activeInteraction ? 'interaction-heading' : ''}`}>
                 <div>
-                  <p className="section-kicker">Agent workspace</p>
+                  <p className="section-kicker">{selectedTeam?.name || 'Agent workspace'}</p>
                   <h2>
                     {wrapupActive
                       ? 'Wrap up interaction'
@@ -766,28 +827,14 @@ export function App() {
                             : 'Agent controls'}
                   </h2>
                 </div>
-                <label className="state-selector">
-                  {activeInteraction && !wrapupActive ? 'After this call' : 'Agent state'}
-                  <SelectMenu
-                    ariaLabel="Agent state"
-                    disabled={stateChangeDisabled}
-                    value={
-                      snapshot.agentState === 'Available'
-                        ? 'available'
-                        : snapshot.selectedIdleCode
-                          ? `idle:${snapshot.selectedIdleCode}`
-                          : 'idle'
-                    }
-                    options={stateMenuOptions}
-                    onChange={(value) => {
-                      void run('agent-state', () =>
-                        value === 'available'
-                          ? controller.setAvailable()
-                          : controller.setIdle(value.replace(/^idle:/, '')),
-                      );
-                    }}
-                  />
-                </label>
+                {activeInteraction ? (
+                  <div className="interaction-timer">
+                    <time>{callElapsed}</time>
+                    <span>{wrapupActive ? 'Wrap-up time' : snapshot.callStatus}</span>
+                  </div>
+                ) : (
+                  <span className="station-health"><i />{snapshot.lineStatus}</span>
+                )}
               </div>
 
               {!hasCall ? (
@@ -819,6 +866,22 @@ export function App() {
                     </div>
                     <span className="association association-wxcc">SDK controlled</span>
                   </div>
+
+                  {[
+                    snapshot.interactionContext.queueName,
+                    snapshot.interactionContext.reason,
+                    snapshot.interactionContext.language,
+                    snapshot.interactionContext.ivrPath,
+                    snapshot.interactionContext.entryPoint,
+                  ].some(Boolean) && (
+                    <div className="context-chips" aria-label="Interaction context">
+                      {snapshot.interactionContext.queueName && <span>Queue · {snapshot.interactionContext.queueName}</span>}
+                      {snapshot.interactionContext.reason && <span>Reason · {snapshot.interactionContext.reason}</span>}
+                      {snapshot.interactionContext.language && <span>Language · {snapshot.interactionContext.language}</span>}
+                      {snapshot.interactionContext.ivrPath && <span>IVR · {snapshot.interactionContext.ivrPath}</span>}
+                      {snapshot.interactionContext.entryPoint && <span>Entry · {snapshot.interactionContext.entryPoint}</span>}
+                    </div>
+                  )}
 
                   <details className="call-metadata">
                     <summary>Interaction details</summary>
@@ -922,7 +985,7 @@ export function App() {
                         </button>
                         <button
                           className={`phone-control ${activeRouteMode === 'consult' || snapshot.consultActive || snapshot.conferenceActive ? 'active' : ''}`}
-                          disabled={busy !== '' || snapshot.consultActive}
+                          disabled={busy !== '' || snapshot.consultActive || (!snapshot.conferenceActive && !snapshot.consultCapable)}
                           onClick={() => {
                             setDialpadTaskId('');
                             if (snapshot.conferenceActive) setParticipantsOpen((open) => !open);
@@ -934,7 +997,7 @@ export function App() {
                         </button>
                         <button
                           className={`phone-control ${activeRouteMode === 'transfer' ? 'active' : ''}`}
-                          disabled={busy !== '' || snapshot.consultActive || snapshot.conferenceActive}
+                          disabled={busy !== '' || snapshot.consultActive || snapshot.conferenceActive || !snapshot.transferCapable}
                           onClick={() => {
                             setDialpadTaskId('');
                             void openRoutePanel('transfer');
@@ -1014,16 +1077,19 @@ export function App() {
                             </div>
                           </div>
                           <div className="consult-action-row">
-                            <button className="button secondary" disabled={busy !== ''} onClick={() => run('end-consult', () => controller.endConsult())}>
+                            <button className="button secondary" disabled={busy !== '' || !snapshot.switchCapable} onClick={() => run('switch-call', () => controller.switchCall())}>
+                              <ControlIcon name="switch" /> Switch to {snapshot.activeLeg === 'consult' ? 'customer' : 'consult'}
+                            </button>
+                            <button className="button secondary" disabled={busy !== '' || !snapshot.endConsultCapable} onClick={() => run('end-consult', () => controller.endConsult())}>
                               End consult
                             </button>
-                            <button className="button conference-button" disabled={busy !== ''} onClick={() => {
+                            <button className="button conference-button" disabled={busy !== '' || !snapshot.conferenceCapable} onClick={() => {
                               setParticipantsOpen(false);
                               void run('conference', () => controller.startConference());
                             }}>
                               <ControlIcon name="conference" /> Conference
                             </button>
-                            <button className="button primary" disabled={busy !== ''} onClick={() => run('consult-transfer', () => controller.completeConsultTransfer())}>
+                            <button className="button primary" disabled={busy !== '' || !snapshot.consultTransferCapable} onClick={() => run('consult-transfer', () => controller.completeConsultTransfer())}>
                               Complete transfer
                             </button>
                           </div>
@@ -1034,30 +1100,50 @@ export function App() {
                         <div className="conference-session">
                           <div className="consult-heading">
                             <div><span className="section-kicker">Conference</span><strong>Everyone is connected</strong></div>
-                            <span className="live-chip"><i />3 participants</span>
+                            <span className="live-chip"><i />{displayParticipants.length} participants</span>
                           </div>
                           <div className="conference-people" aria-label="Conference participants">
-                            <div><span className="participant-avatar">{snapshot.agentName.charAt(0) || 'Y'}</span><strong>You</strong><small>Host</small></div>
-                            <div><span className="participant-avatar">{snapshot.callerName.charAt(0) || 'C'}</span><strong>{snapshot.callerName || 'Customer'}</strong><small>Connected</small></div>
-                            <div><span className="participant-avatar speaking-avatar">{snapshot.consultDestinationName.charAt(0) || 'A'}</span><strong>{snapshot.consultDestinationName || 'Consulted agent'}</strong><small>Connected</small></div>
+                            {displayParticipants.map((participant) => (
+                              <div key={participant.id}>
+                                <span className="participant-avatar">{participant.name.charAt(0) || 'P'}</span>
+                                <strong>{participant.isCurrentAgent ? 'You' : participant.name}</strong>
+                                <small>{participant.held ? 'Held' : participant.state}</small>
+                              </div>
+                            ))}
                           </div>
                           <div className="conference-actions">
                             <button className="button secondary" disabled={busy !== ''} aria-expanded={participantsOpen} onClick={() => setParticipantsOpen((open) => !open)}>
                               <ControlIcon name="participants" /> {participantsOpen ? 'Hide participants' : 'Manage participants'}
                             </button>
-                            <button className="button primary" disabled={busy !== ''} onClick={() => void run('exit-conference', async () => {
+                            <button className="button primary" disabled={busy !== '' || !snapshot.exitConferenceCapable} onClick={() => void run('exit-conference', async () => {
                               await controller.exitConference();
                               setParticipantsOpen(false);
                             })}>
                               Leave conference
                             </button>
+                            <button className="button secondary" disabled={busy !== '' || !snapshot.transferConferenceCapable} onClick={() => void run('transfer-conference', () => controller.transferConference())}>
+                              <ControlIcon name="transfer" /> Hand over conference
+                            </button>
                           </div>
                           {participantsOpen && (
                             <div className="participant-manager">
-                              <div className="participant-row"><span className="participant-avatar">{snapshot.agentName.charAt(0) || 'Y'}</span><div><strong>You</strong><span>Conference host</span></div><span className="neutral-chip">Host</span></div>
-                              <div className="participant-row"><span className="participant-avatar">{snapshot.callerName.charAt(0) || 'C'}</span><div><strong>{snapshot.callerName || 'Customer'}</strong><span>{snapshot.callerNumber || 'Connected caller'}</span></div></div>
-                              <div className="participant-row"><span className="participant-avatar">{snapshot.consultDestinationName.charAt(0) || 'A'}</span><div><strong>{snapshot.consultDestinationName || 'Consulted agent'}</strong><span>Consulted participant</span></div><button type="button" className="drop-participant" disabled title="The current Contact Center SDK does not expose participant removal.">Drop</button></div>
-                              <p className="participant-api-note">Participant removal is not available through the current Contact Center task API.</p>
+                              {displayParticipants.map((participant) => (
+                                <div className="participant-row" key={participant.id}>
+                                  <span className="participant-avatar">{participant.name.charAt(0) || 'P'}</span>
+                                  <div><strong>{participant.isCurrentAgent ? 'You' : participant.name}</strong><span>{participant.type} · {participant.held ? 'Held' : participant.state}</span></div>
+                                  {participant.isCurrentAgent ? (
+                                    <span className="neutral-chip">Host</span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="drop-participant"
+                                      disabled={busy !== '' || !participant.id || participant.id === 'customer' || participant.id === 'consult'}
+                                      title={participant.id === 'customer' || participant.id === 'consult' ? 'Participant data is still being synchronized by the SDK.' : 'Drop participant'}
+                                      onClick={() => void run('drop-participant', () => controller.dropConferenceParticipant(participant.id))}
+                                    >Drop</button>
+                                  )}
+                                </div>
+                              ))}
                             </div>
                           )}
                         </div>
@@ -1081,22 +1167,35 @@ export function App() {
           )}
         </section>
 
-        <details className="panel diagnostics-panel">
-          <summary>
-            <span><span className="section-kicker">Diagnostics</span>Event timeline</span>
-            <span className="event-count">{snapshot.error ? 'Needs attention' : snapshot.timeline.length}</span>
-          </summary>
-          {snapshot.error && <div className="notice error-notice">{snapshot.error}</div>}
-          <ol className="timeline">
-            {snapshot.timeline.length === 0 && <li className="empty-event">Runtime events appear here.</li>}
-            {snapshot.timeline.map((entry) => (
-              <li key={entry.id} className={`event event-${entry.level}`}>
-                <time>{entry.at}</time><p>{entry.message}</p>
-              </li>
-            ))}
-          </ol>
-        </details>
+        {stationLoggedIn && activeInteraction && (
+          <InteractionInsights
+            snapshot={snapshot}
+            controller={controller}
+            busy={busy}
+            run={run}
+          />
+        )}
       </div>
+
+      {diagnosticsOpen && (
+        <div className="drawer-scrim" onClick={() => setDiagnosticsOpen(false)}>
+          <aside className="diagnostics-drawer" aria-label="Runtime diagnostics" onClick={(event) => event.stopPropagation()}>
+            <div className="drawer-heading">
+              <div><span className="section-kicker">Diagnostics</span><h2>Event timeline</h2></div>
+              <button type="button" aria-label="Close diagnostics" onClick={() => setDiagnosticsOpen(false)}><ControlIcon name="close" /></button>
+            </div>
+            {snapshot.error && <div className="notice error-notice">{snapshot.error}</div>}
+            <ol className="timeline">
+              {snapshot.timeline.length === 0 && <li className="empty-event">Runtime events appear here.</li>}
+              {snapshot.timeline.map((entry) => (
+                <li key={entry.id} className={`event event-${entry.level}`}>
+                  <time>{entry.at}</time><p>{entry.message}</p>
+                </li>
+              ))}
+            </ol>
+          </aside>
+        </div>
+      )}
     </main>
   );
 }

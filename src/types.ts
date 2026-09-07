@@ -42,11 +42,54 @@ export interface CallDestination {
   detail?: string;
 }
 
+export interface InteractionContext {
+  queueName: string;
+  reason: string;
+  ivrPath: string;
+  entryPoint: string;
+  language: string;
+  offeredAt?: number;
+}
+
+export interface InteractionParticipant {
+  id: string;
+  name: string;
+  type: string;
+  state: string;
+  held: boolean;
+  isCurrentAgent: boolean;
+}
+
+export interface TranscriptEntry {
+  id: string;
+  role: string;
+  content: string;
+  timestamp: number;
+  isFinal: boolean;
+}
+
+export interface AiSuggestion {
+  id: string;
+  adaptiveCardId: string;
+  content: string;
+  createdAt: number;
+}
+
+export interface AgentPerformanceSummary {
+  source: 'graphql-search';
+  from: number;
+  to: number;
+  handled: number;
+  averageConnectedSeconds: number;
+  averageWrapupSeconds: number;
+}
+
 export interface ControllerSnapshot {
   lifecycle: LifecycleStatus;
   callStatus: CallStatus;
   agentName: string;
   agentState: string;
+  stateChangedAt: number;
   teams: AgentTeam[];
   selectedTeamId: string;
   stationLoginOption: StationLoginOption | '';
@@ -55,8 +98,11 @@ export interface ControllerSnapshot {
   webRtcEnabled: boolean;
   lineStatus: string;
   interactionId: string;
+  callStartedAt: number;
   callerName: string;
   callerNumber: string;
+  interactionContext: InteractionContext;
+  participants: InteractionParticipant[];
   acceptCapable: boolean;
   declineCapable: boolean;
   holdCapable: boolean;
@@ -67,6 +113,15 @@ export interface ControllerSnapshot {
   dtmfCapable: boolean;
   recordingPaused: boolean;
   recordingPauseCapable: boolean;
+  consultCapable: boolean;
+  transferCapable: boolean;
+  switchCapable: boolean;
+  conferenceCapable: boolean;
+  consultTransferCapable: boolean;
+  endConsultCapable: boolean;
+  exitConferenceCapable: boolean;
+  transferConferenceCapable: boolean;
+  activeLeg: 'main' | 'consult';
   consultActive: boolean;
   conferenceActive: boolean;
   consultDestinationName: string;
@@ -78,6 +133,14 @@ export interface ControllerSnapshot {
   selectedWrapupCode: string;
   idleCodes: Profile['idleCodes'];
   selectedIdleCode: string;
+  transcripts: TranscriptEntry[];
+  aiSuggestions: AiSuggestion[];
+  aiAssistanceLoading: boolean;
+  aiSummaryLoading: boolean;
+  aiError: string;
+  midCallSummary: string;
+  postCallSummary: string;
+  performance?: AgentPerformanceSummary;
   timeline: TimelineEntry[];
   error: string;
   activeTask?: ITask;
@@ -104,6 +167,7 @@ export const initialSnapshot: ControllerSnapshot = {
   callStatus: 'none',
   agentName: '',
   agentState: 'Signed out',
+  stateChangedAt: 0,
   teams: [],
   selectedTeamId: '',
   stationLoginOption: '',
@@ -112,8 +176,17 @@ export const initialSnapshot: ControllerSnapshot = {
   webRtcEnabled: false,
   lineStatus: 'Not checked',
   interactionId: '',
+  callStartedAt: 0,
   callerName: '',
   callerNumber: '',
+  interactionContext: {
+    queueName: '',
+    reason: '',
+    ivrPath: '',
+    entryPoint: '',
+    language: '',
+  },
+  participants: [],
   acceptCapable: false,
   declineCapable: false,
   holdCapable: false,
@@ -124,6 +197,15 @@ export const initialSnapshot: ControllerSnapshot = {
   dtmfCapable: false,
   recordingPaused: false,
   recordingPauseCapable: false,
+  consultCapable: false,
+  transferCapable: false,
+  switchCapable: false,
+  conferenceCapable: false,
+  consultTransferCapable: false,
+  endConsultCapable: false,
+  exitConferenceCapable: false,
+  transferConferenceCapable: false,
+  activeLeg: 'main',
   consultActive: false,
   conferenceActive: false,
   consultDestinationName: '',
@@ -135,6 +217,13 @@ export const initialSnapshot: ControllerSnapshot = {
   selectedWrapupCode: '',
   idleCodes: [],
   selectedIdleCode: '',
+  transcripts: [],
+  aiSuggestions: [],
+  aiAssistanceLoading: false,
+  aiSummaryLoading: false,
+  aiError: '',
+  midCallSummary: '',
+  postCallSummary: '',
   timeline: [],
   error: '',
 };

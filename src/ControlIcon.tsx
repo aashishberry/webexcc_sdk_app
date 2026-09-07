@@ -15,6 +15,8 @@ type ControlIconName =
   | 'desktop'
   | 'dial'
   | 'mic'
+  | 'activity'
+  | 'switch'
   | 'close';
 
 interface ControlIconProps {
@@ -38,6 +40,8 @@ const paths: Record<ControlIconName, React.ReactNode> = {
   desktop: <><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></>,
   dial: <><path d="M7 4 4.5 6.5c1.2 6.5 6.5 11.8 13 13L20 17l-4-3-2 2c-2.4-1-4.9-3.5-6-6l2-2-3-4Z"/><path d="M14.5 5.5h5M17 3v5"/></>,
   mic: <><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></>,
+  activity: <><path d="M3 12h4l2.5-7 5 14L17 12h4"/></>,
+  switch: <><path d="M5 7h12M14 4l3 3-3 3M19 17H7M10 14l-3 3 3 3"/></>,
   close: <><path d="m6 6 12 12M18 6 6 18"/></>,
 };
 

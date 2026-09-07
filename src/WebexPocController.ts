@@ -1,4 +1,4 @@
-import type {ITask, Profile} from '@webex/contact-center';
+import {type ITask, type Profile} from '@webex/contact-center';
 import {reportBackendEvent} from './backendDiagnostics';
 import {normalizeTeams} from './normalizers';
 import {recoveredAgentSession} from './sessionRecovery';
@@ -8,8 +8,12 @@ import {
   type InitializeOptions,
   type LifecycleStatus,
   type LogLevel,
+  type AiSuggestion,
+  type InteractionContext,
+  type InteractionParticipant,
   type StationLoginOption,
   type StationLoginOptions,
+  type TranscriptEntry,
 } from './types';
 
 type SnapshotListener = (snapshot: ControllerSnapshot) => void;
@@ -49,6 +53,136 @@ function incomingName(task: ITask): string {
   );
 }
 
+function firstText(...values: unknown[]): string {
+  return values.find((value): value is string => typeof value === 'string' && value.trim() !== '')?.trim() ?? '';
+}
+
+function callAssociatedValue(source: unknown, ...keys: string[]): string {
+  if (!source || typeof source !== 'object') return '';
+  const record = source as Record<string, any>;
+  for (const key of keys) {
+    const value = record[key]?.value ?? record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function interactionContext(task: ITask): InteractionContext {
+  const data = task.data as unknown as Record<string, any>;
+  const interaction = data.interaction ?? {};
+  const details = interaction.callProcessingDetails ?? data.callProcessingDetails ?? {};
+  const associated = interaction.callAssociatedDetails ?? interaction.callAssociatedData ?? {};
+  const flow = interaction.callFlowParams ?? data.callFlowParams ?? {};
+  return {
+    queueName: firstText(
+      details.virtualTeamName,
+      details.queueName,
+      details.QueueName,
+      interaction.currentVTeamName,
+      interaction.currentVTeam,
+    ),
+    reason: firstText(
+      details.reason,
+      details.category,
+      callAssociatedValue(associated, 'reason', 'Reason', 'callReason', 'intent'),
+      callAssociatedValue(flow, 'reason', 'Reason', 'callReason', 'intent'),
+    ),
+    ivrPath: firstText(
+      details.IvrPath,
+      details.ivrPath,
+      callAssociatedValue(associated, 'ivrPath', 'IVRPath', 'IvrPath'),
+      callAssociatedValue(flow, 'ivrPath', 'IVRPath', 'IvrPath'),
+    ),
+    entryPoint: firstText(
+      details.entryPointName,
+      details.EntryPointName,
+      details.entryPointId,
+      details.EP_ID,
+    ),
+    language: firstText(
+      details.language,
+      details.languageCode,
+      callAssociatedValue(associated, 'language', 'languageCode', 'Language'),
+    ),
+    offeredAt: Number(interaction.createdTimestamp || data.createdTimestamp) || undefined,
+  };
+}
+
+function interactionParticipants(task: ITask, agentId = ''): InteractionParticipant[] {
+  const data = task.data as unknown as Record<string, any>;
+  const interaction = data.interaction ?? {};
+  const media = Object.values(interaction.media ?? {}) as Array<Record<string, any>>;
+  return Object.entries(interaction.participants ?? {})
+    .map(([id, value]) => {
+      const participant = value as Record<string, any>;
+      const participantId = firstText(
+        participant.id,
+        participant.participantId,
+        participant.pId,
+        id,
+      );
+      const isHeld = media.some(
+        (entry) => entry.isHold === true &&
+          Array.isArray(entry.participants) &&
+          (entry.participants.includes(id) || entry.participants.includes(participantId)),
+      );
+      return {
+        id: participantId,
+        name: firstText(participant.name, participant.pName, participant.dn, participant.callerId) || 'Participant',
+        type: firstText(participant.type, participant.pType) || 'Participant',
+        state: firstText(participant.consultState, participant.currentState) || (participant.hasJoined ? 'Connected' : 'Invited'),
+        held: isHeld,
+        isCurrentAgent: participantId === agentId || participant.agentId === agentId,
+      };
+    })
+    .filter((participant) => participant.name || participant.id);
+}
+
+function transcriptEntry(payload: any): TranscriptEntry | undefined {
+  const data = payload?.data ?? payload;
+  const content = firstText(data?.content, data?.text, data?.utterance);
+  if (!content) return undefined;
+  return {
+    id: firstText(data?.messageId, data?.utteranceId) || `${Date.now()}-${content.slice(0, 16)}`,
+    role: firstText(data?.role, data?.speaker) || 'UNKNOWN',
+    content,
+    timestamp: Number(data?.publishTimestamp) || Date.now(),
+    isFinal: data?.isFinal !== false,
+  };
+}
+
+function collectAssistantText(value: unknown, depth = 0): string[] {
+  if (depth > 5 || value == null) return [];
+  if (typeof value === 'string') return value.trim() ? [value.trim()] : [];
+  if (Array.isArray(value)) return value.flatMap((entry) => collectAssistantText(entry, depth + 1));
+  if (typeof value !== 'object') return [];
+  const record = value as Record<string, unknown>;
+  const preferred = ['suggestion', 'answer', 'content', 'text', 'response', 'summary'];
+  const prioritized = preferred.flatMap((key) => key in record ? collectAssistantText(record[key], depth + 1) : []);
+  return prioritized.length
+    ? prioritized
+    : Object.entries(record)
+        .filter(([key]) => !['adaptiveCardId', 'id', 'interactionId', 'conversationId'].includes(key))
+        .flatMap(([, entry]) => collectAssistantText(entry, depth + 1));
+}
+
+function aiSuggestion(payload: any): AiSuggestion | undefined {
+  const data = payload?.data ?? payload;
+  const content = collectAssistantText(data).find((value) => value.length > 2) ?? '';
+  if (!content) return undefined;
+  const adaptiveCardId = firstText(data?.adaptiveCardId, data?.id, payload?.adaptiveCardId);
+  return {
+    id: adaptiveCardId || `${Date.now()}-${content.slice(0, 16)}`,
+    adaptiveCardId,
+    content,
+    createdAt: Date.now(),
+  };
+}
+
+function aiSummary(payload: any): string {
+  return collectAssistantText(payload?.data ?? payload).find((value) => value.length > 2) ?? '';
+}
+
 function recordingPauseEnabled(task: ITask): boolean {
   const data = task.data as unknown as Record<string, any>;
   const value =
@@ -67,13 +201,24 @@ function recordingPaused(task: ITask): boolean {
 
 function taskControlState(task: ITask) {
   const main = task.uiControls?.main;
+  const activeLeg = task.uiControls?.activeLeg ?? 'main';
+  const active = task.uiControls?.[activeLeg] ?? main;
   return {
     acceptCapable: Boolean(main?.accept?.isEnabled),
     declineCapable: Boolean(main?.decline?.isEnabled),
-    holdCapable: Boolean(main?.hold?.isEnabled),
-    endCapable: Boolean(main?.end?.isEnabled),
-    muteCapable: Boolean(main?.mute?.isEnabled),
-    dtmfCapable: Boolean(main?.keypad?.isEnabled),
+    holdCapable: Boolean(active?.hold?.isEnabled),
+    endCapable: Boolean(active?.end?.isEnabled || main?.end?.isEnabled),
+    muteCapable: Boolean(active?.mute?.isEnabled),
+    dtmfCapable: Boolean(active?.keypad?.isEnabled),
+    consultCapable: Boolean(main?.consult?.isEnabled),
+    transferCapable: Boolean(main?.transfer?.isEnabled),
+    switchCapable: Boolean(active?.switch?.isEnabled),
+    conferenceCapable: Boolean(active?.conference?.isEnabled || active?.mergeToConference?.isEnabled),
+    consultTransferCapable: Boolean(active?.consultTransfer?.isEnabled),
+    endConsultCapable: Boolean(active?.endConsult?.isEnabled),
+    exitConferenceCapable: Boolean(active?.exitConference?.isEnabled),
+    transferConferenceCapable: Boolean(active?.transferConference?.isEnabled),
+    activeLeg,
   };
 }
 
@@ -133,7 +278,12 @@ export class WebexPocController {
   }
 
   private setLifecycle(lifecycle: LifecycleStatus, agentState?: string): void {
-    this.update({lifecycle, ...(agentState ? {agentState} : {})});
+    this.update({
+      lifecycle,
+      ...(agentState
+        ? {agentState, ...(agentState !== this.snapshot.agentState ? {stateChangedAt: Date.now()} : {})}
+        : {}),
+    });
   }
 
   async initialize(options: InitializeOptions): Promise<void> {
@@ -458,6 +608,95 @@ export class WebexPocController {
     }
   }
 
+  async requestAssistance(context = ''): Promise<void> {
+    if (!this.cc?.apiAIAssistant || !this.task || !this.profile) {
+      throw new Error('AI assistance is not available for the active interaction.');
+    }
+    this.update({aiAssistanceLoading: true, aiError: ''});
+    try {
+      const response = await this.cc.apiAIAssistant.getRealTimeAssistance({
+        agentId: this.profile.agentId,
+        interactionId: this.task.data.interactionId,
+        languageCode: 'en',
+        ...(context.trim() ? {context: context.trim()} : {}),
+      });
+      const suggestion = aiSuggestion(response);
+      if (suggestion) {
+        this.update({
+          aiSuggestions: [
+            suggestion,
+            ...this.snapshot.aiSuggestions.filter((item) => item.id !== suggestion.id),
+          ].slice(0, 10),
+        });
+      }
+      this.log('AI assistance requested.');
+      reportBackendEvent('cc.ai_assistance', 'succeeded');
+    } catch (error) {
+      const message = errorMessage(error);
+      this.update({aiError: message});
+      reportBackendEvent('cc.ai_assistance', 'failed');
+      this.fail('AI assistance request failed', error);
+    } finally {
+      this.update({aiAssistanceLoading: false});
+    }
+  }
+
+  async sendAssistanceFeedback(
+    suggestionId: string,
+    actionId: 'likeButton' | 'dislikeButton' | 'copyButton',
+  ): Promise<void> {
+    if (!this.cc?.apiAIAssistant || !this.task || !this.profile) return;
+    const suggestion = this.snapshot.aiSuggestions.find((item) => item.id === suggestionId);
+    if (!suggestion?.adaptiveCardId) return;
+    try {
+      await this.cc.apiAIAssistant.sendRealTimeAssistanceUserAction({
+        agentId: this.profile.agentId,
+        interactionId: this.task.data.interactionId,
+        adaptiveCardId: suggestion.adaptiveCardId,
+        actionId,
+      });
+      reportBackendEvent('cc.ai_feedback', 'succeeded', {action: actionId});
+    } catch (error) {
+      reportBackendEvent('cc.ai_feedback', 'failed', {action: actionId});
+      this.fail('AI feedback failed', error);
+    }
+  }
+
+  async requestSummary(kind: 'mid-call' | 'post-call'): Promise<void> {
+    if (!this.cc?.apiAIAssistant || !this.task || !this.profile) {
+      throw new Error('AI summaries are not available for the active interaction.');
+    }
+    this.update({aiSummaryLoading: true, aiError: ''});
+    try {
+      const response = await this.cc.apiAIAssistant.sendEvent(
+        this.profile.agentId,
+        this.task.data.interactionId,
+        'CUSTOM_EVENT',
+        kind === 'mid-call'
+          ? 'GET_MID_CALL_SUMMARY'
+          : 'GET_POST_CALL_SUMMARY',
+        {},
+        'en',
+      );
+      const summary = aiSummary(response);
+      this.update({
+        aiSummaryLoading: false,
+        ...(summary
+          ? kind === 'mid-call'
+            ? {midCallSummary: summary}
+            : {postCallSummary: summary}
+          : {}),
+      });
+      this.log(`${kind === 'mid-call' ? 'Mid-call' : 'Post-call'} AI summary requested.`);
+      reportBackendEvent('cc.ai_summary', 'succeeded', {action: kind});
+    } catch (error) {
+      const message = errorMessage(error);
+      this.update({aiSummaryLoading: false, aiError: message});
+      reportBackendEvent('cc.ai_summary', 'failed', {action: kind});
+      this.fail('AI summary request failed', error);
+    }
+  }
+
   async loadDestinations(): Promise<void> {
     if (!this.cc || !this.task) throw new Error('A Contact Center task is required.');
     try {
@@ -553,6 +792,49 @@ export class WebexPocController {
     } catch (error) {
       reportBackendEvent('cc.conference', 'failed', {action: 'start'});
       this.fail('Starting conference failed', error);
+    }
+  }
+
+  async switchCall(): Promise<void> {
+    if (!this.task || !this.snapshot.switchCapable) {
+      throw new Error('Switching call legs is not available.');
+    }
+    try {
+      await this.task.switchCall();
+      this.update(taskControlState(this.task));
+      this.log('Active call leg switched.', 'success');
+      reportBackendEvent('cc.consult_switch', 'succeeded');
+    } catch (error) {
+      reportBackendEvent('cc.consult_switch', 'failed');
+      this.fail('Switching call legs failed', error);
+    }
+  }
+
+  async dropConferenceParticipant(participantId: string): Promise<void> {
+    if (!this.task || !this.snapshot.conferenceActive) throw new Error('No active conference.');
+    if (!participantId) throw new Error('Select a conference participant.');
+    try {
+      await this.task.dropConferenceParticipant({participantId});
+      this.update({participants: interactionParticipants(this.task, this.profile?.agentId)});
+      this.log('Conference participant dropped.', 'success');
+      reportBackendEvent('cc.conference_participant', 'succeeded', {action: 'drop'});
+    } catch (error) {
+      reportBackendEvent('cc.conference_participant', 'failed', {action: 'drop'});
+      this.fail('Dropping conference participant failed', error);
+    }
+  }
+
+  async transferConference(): Promise<void> {
+    if (!this.task || !this.snapshot.transferConferenceCapable) {
+      throw new Error('Conference handover is not available.');
+    }
+    try {
+      await this.task.transferConference();
+      this.log('Conference handed over.', 'success');
+      reportBackendEvent('cc.conference', 'succeeded', {action: 'transfer'});
+    } catch (error) {
+      reportBackendEvent('cc.conference', 'failed', {action: 'transfer'});
+      this.fail('Conference handover failed', error);
     }
   }
 
@@ -652,7 +934,12 @@ export class WebexPocController {
         ? 'Available'
         : idleCode?.name || rawState;
       const lifecycle = state === 'Available' ? 'available' : 'idle';
-      this.update({agentState: state, lifecycle, ...(idleCode ? {selectedIdleCode: idleCode.id} : {})});
+      this.update({
+        agentState: state,
+        lifecycle,
+        ...(state !== this.snapshot.agentState ? {stateChangedAt: Date.now()} : {}),
+        ...(idleCode ? {selectedIdleCode: idleCode.id} : {}),
+      });
       this.log(`WxCC agent state event: ${state}.`);
     });
     this.cc.on('task:incoming', (task: ITask) => {
@@ -662,9 +949,12 @@ export class WebexPocController {
       this.update({
         activeTask: task,
         interactionId,
+        callStartedAt: interactionContext(task).offeredAt || Date.now(),
         callStatus: 'ringing',
         callerName: incomingName(task),
         callerNumber: incomingNumber(task),
+        interactionContext: interactionContext(task),
+        participants: interactionParticipants(task, this.profile?.agentId),
         ...taskControlState(task),
         muted: task.getWxAppMuted?.() ?? false,
         recordingPauseCapable: recordingPauseEnabled(task),
@@ -674,6 +964,13 @@ export class WebexPocController {
         consultDestinationName: '',
         destinations: [],
         destinationsLoaded: false,
+        transcripts: [],
+        aiSuggestions: [],
+        aiAssistanceLoading: false,
+        aiSummaryLoading: false,
+        aiError: '',
+        midCallSummary: '',
+        postCallSummary: '',
         remoteAudioTrack: undefined,
         error: '',
       });
@@ -706,9 +1003,12 @@ export class WebexPocController {
     this.update({
       activeTask: task,
       interactionId: task.data.interactionId,
+      callStartedAt: interactionContext(task).offeredAt || Date.now(),
       callStatus,
       callerName: incomingName(task),
       callerNumber: incomingNumber(task),
+      interactionContext: interactionContext(task),
+      participants: interactionParticipants(task, this.profile?.agentId),
       ...taskControlState(task),
       muted: task.getWxAppMuted?.() ?? false,
       recordingPauseCapable: recordingPauseEnabled(task),
@@ -721,6 +1021,7 @@ export class WebexPocController {
     });
     this.log(`WxCC task hydrated after session recovery (${state || 'active'}).`, 'success');
     reportBackendEvent('cc.task', 'observed', {state: callStatus});
+    void this.restoreHistoricTranscripts(task);
   }
 
   private attachTaskListeners(task: ITask): void {
@@ -728,7 +1029,13 @@ export class WebexPocController {
     this.observedTasks.add(task);
 
     task.on('task:ui-controls-updated', () => {
-      if (this.task === task) this.update(taskControlState(task));
+      if (this.task === task) {
+        this.update({
+          ...taskControlState(task),
+          interactionContext: interactionContext(task),
+          participants: interactionParticipants(task, this.profile?.agentId),
+        });
+      }
     });
     task.on('task:wxapp-mute-state-updated', (event: {muted?: boolean}) => {
       if (this.task === task && typeof event?.muted === 'boolean') {
@@ -765,6 +1072,37 @@ export class WebexPocController {
     task.on('task:conferenceEnded', () =>
       this.update({consultActive: false, conferenceActive: false}),
     );
+    task.on('REAL_TIME_TRANSCRIPTION', (payload: unknown) => {
+      if (this.task !== task) return;
+      const entry = transcriptEntry(payload);
+      if (!entry) return;
+      const transcripts = [...this.snapshot.transcripts];
+      const existingIndex = transcripts.findIndex((candidate) => candidate.id === entry.id);
+      if (existingIndex >= 0) transcripts[existingIndex] = entry;
+      else transcripts.push(entry);
+      this.update({transcripts: transcripts.slice(-200)});
+    });
+    task.on('SUGGESTED_RESPONSE', (payload: unknown) => {
+      if (this.task !== task) return;
+      const suggestion = aiSuggestion(payload);
+      if (!suggestion) return;
+      this.update({
+        aiSuggestions: [suggestion, ...this.snapshot.aiSuggestions.filter((item) => item.id !== suggestion.id)].slice(0, 10),
+        aiAssistanceLoading: false,
+        aiError: '',
+      });
+      this.log('AI suggested response received.', 'success');
+    });
+    task.on('MID_CALL_SUMMARY', (payload: unknown) => {
+      if (this.task !== task) return;
+      const summary = aiSummary(payload);
+      if (summary) this.update({midCallSummary: summary, aiSummaryLoading: false, aiError: ''});
+    });
+    task.on('POST_CALL_SUMMARY', (payload: unknown) => {
+      if (this.task !== task) return;
+      const summary = aiSummary(payload);
+      if (summary) this.update({postCallSummary: summary, aiSummaryLoading: false, aiError: ''});
+    });
     task.on('task:wrapup', () => {
       this.update({callStatus: 'wrap-up'});
       this.log('WxCC task entered wrap-up.');
@@ -780,6 +1118,7 @@ export class WebexPocController {
       if (currentTask.data.wrapUpRequired) {
         this.update({activeTask: currentTask, callStatus: 'wrap-up'});
         this.log('WxCC task ended; waiting for wrap-up.');
+        void this.requestSummary('post-call').catch(() => undefined);
         return;
       }
 
@@ -791,13 +1130,40 @@ export class WebexPocController {
     );
   }
 
+  private async restoreHistoricTranscripts(task: ITask): Promise<void> {
+    if (!this.cc?.apiAIAssistant || !this.profile) return;
+    try {
+      const response = await this.cc.apiAIAssistant.fetchHistoricTranscripts(
+        this.profile.agentId,
+        task.data.interactionId,
+      );
+      if (this.task !== task || !Array.isArray(response?.data)) return;
+      const transcripts = response.data
+        .filter((entry: any) => typeof entry?.content === 'string' && entry.content.trim())
+        .map((entry: any): TranscriptEntry => ({
+          id: firstText(entry.messageId) || `${entry.publishTimestamp}-${entry.content.slice(0, 16)}`,
+          role: firstText(entry.role) || 'UNKNOWN',
+          content: entry.content.trim(),
+          timestamp: Number(entry.publishTimestamp) || Date.now(),
+          isFinal: true,
+        }));
+      this.update({transcripts: transcripts.slice(-200)});
+      this.log(`Restored ${transcripts.length} transcript entries.`);
+    } catch {
+      this.log('Historic transcript recovery is unavailable for this interaction.', 'warning');
+    }
+  }
+
   private clearCallState(): void {
     this.task = undefined;
     this.update({
       callStatus: 'none',
       interactionId: '',
+      callStartedAt: 0,
       callerName: '',
       callerNumber: '',
+      interactionContext: structuredClone(initialSnapshot.interactionContext),
+      participants: [],
       acceptCapable: false,
       declineCapable: false,
       holdCapable: false,
@@ -808,11 +1174,27 @@ export class WebexPocController {
       dtmfCapable: false,
       recordingPaused: false,
       recordingPauseCapable: false,
+      consultCapable: false,
+      transferCapable: false,
+      switchCapable: false,
+      conferenceCapable: false,
+      consultTransferCapable: false,
+      endConsultCapable: false,
+      exitConferenceCapable: false,
+      transferConferenceCapable: false,
+      activeLeg: 'main',
       consultActive: false,
       conferenceActive: false,
       consultDestinationName: '',
       destinations: [],
       destinationsLoaded: false,
+      transcripts: [],
+      aiSuggestions: [],
+      aiAssistanceLoading: false,
+      aiSummaryLoading: false,
+      aiError: '',
+      midCallSummary: '',
+      postCallSummary: '',
       activeTask: undefined,
       remoteAudioTrack: undefined,
     });

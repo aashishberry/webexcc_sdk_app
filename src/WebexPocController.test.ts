@@ -326,6 +326,59 @@ describe('WebexPocController call controls', () => {
     expect(controller.getSnapshot().remoteAudioTrack).toBe(track);
   });
 
+  it('maps active-leg consult and conference capabilities from SDK UI controls', () => {
+    const controller = new WebexPocController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {task: ITask};
+    internal.task = task;
+    observeTask(controller, task);
+    (task.uiControls as any).activeLeg = 'consult';
+    (task.uiControls as any).main.consult = {isVisible: true, isEnabled: true};
+    (task.uiControls as any).main.transfer = {isVisible: true, isEnabled: true};
+    (task.uiControls as any).consult = {
+      hold: {isVisible: true, isEnabled: true},
+      mute: {isVisible: true, isEnabled: true},
+      keypad: {isVisible: true, isEnabled: true},
+      switch: {isVisible: true, isEnabled: true},
+      conference: {isVisible: true, isEnabled: true},
+      consultTransfer: {isVisible: true, isEnabled: true},
+      endConsult: {isVisible: true, isEnabled: true},
+      transferConference: {isVisible: true, isEnabled: true},
+    };
+
+    task.emitTest('task:ui-controls-updated');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      activeLeg: 'consult',
+      consultCapable: true,
+      transferCapable: true,
+      switchCapable: true,
+      conferenceCapable: true,
+      consultTransferCapable: true,
+      endConsultCapable: true,
+      transferConferenceCapable: true,
+    });
+  });
+
+  it('stores live transcript updates by message ID', () => {
+    const controller = new WebexPocController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {task: ITask};
+    internal.task = task;
+    observeTask(controller, task);
+
+    task.emitTest('REAL_TIME_TRANSCRIPTION', {
+      data: {messageId: 'message-1', role: 'CUSTOMER', content: 'Initial words', isFinal: false},
+    });
+    task.emitTest('REAL_TIME_TRANSCRIPTION', {
+      data: {messageId: 'message-1', role: 'CUSTOMER', content: 'Final words', isFinal: true},
+    });
+
+    expect(controller.getSnapshot().transcripts).toEqual([
+      expect.objectContaining({id: 'message-1', content: 'Final words', isFinal: true}),
+    ]);
+  });
+
   it('uses the Contact Center task for recording controls', async () => {
     const controller = new WebexPocController();
     const pauseRecording = vi.fn(async () => undefined);

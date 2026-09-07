@@ -1,0 +1,190 @@
+import {useState} from 'react';
+import type {WebexPocController} from './WebexPocController';
+import type {ControllerSnapshot} from './types';
+
+type InsightTab = 'context' | 'transcript' | 'assist' | 'summary';
+
+interface InteractionInsightsProps {
+  snapshot: ControllerSnapshot;
+  controller: WebexPocController;
+  busy: string;
+  run: (name: string, action: () => void | Promise<void>) => Promise<void>;
+}
+
+function labelForRole(role: string): string {
+  const normalized = role.toLowerCase();
+  if (normalized.includes('agent')) return 'Agent';
+  if (normalized.includes('customer') || normalized.includes('caller')) return 'Customer';
+  return role || 'Speaker';
+}
+
+function ContextView({snapshot}: {snapshot: ControllerSnapshot}) {
+  const context = snapshot.interactionContext;
+  const values = [
+    ['Queue', context.queueName],
+    ['Reason', context.reason],
+    ['IVR path', context.ivrPath],
+    ['Entry point', context.entryPoint],
+    ['Language', context.language],
+  ].filter(([, value]) => value);
+
+  return (
+    <div className="insight-content">
+      <div className="insight-customer">
+        <span className="insight-avatar">{snapshot.callerName.charAt(0) || 'C'}</span>
+        <div>
+          <strong>{snapshot.callerName || 'Contact Center caller'}</strong>
+          <span>{snapshot.callerNumber || 'Number unavailable'}</span>
+        </div>
+      </div>
+      {values.length ? (
+        <dl className="context-values">
+          {values.map(([label, value]) => (
+            <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
+          ))}
+        </dl>
+      ) : (
+        <div className="insight-empty compact">
+          Interaction context will appear when the flow supplies it.
+        </div>
+      )}
+      <details className="technical-details">
+        <summary>Technical details</summary>
+        <span>Interaction ID</span>
+        <code title={snapshot.interactionId}>{snapshot.interactionId || 'Unavailable'}</code>
+      </details>
+    </div>
+  );
+}
+
+function TranscriptView({snapshot}: {snapshot: ControllerSnapshot}) {
+  return (
+    <div className="insight-content transcript-list" aria-live="polite">
+      {snapshot.transcripts.length ? snapshot.transcripts.map((entry) => (
+        <article className={`transcript-entry role-${entry.role.toLowerCase()}`} key={entry.id}>
+          <div>
+            <strong>{labelForRole(entry.role)}</strong>
+            <time>{new Date(entry.timestamp).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</time>
+          </div>
+          <p>{entry.content}</p>
+        </article>
+      )) : (
+        <div className="insight-empty">
+          <strong>No transcript yet</strong>
+          <span>Live transcript entries appear here when the feature is enabled for this agent.</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AssistanceView({snapshot, controller, busy, run}: InteractionInsightsProps) {
+  const [context, setContext] = useState('');
+  const latest = snapshot.aiSuggestions[0];
+
+  const copySuggestion = async () => {
+    if (!latest) return;
+    await navigator.clipboard.writeText(latest.content);
+    await controller.sendAssistanceFeedback(latest.id, 'copyButton');
+  };
+
+  return (
+    <div className="insight-content">
+      {latest ? (
+        <article className="suggestion-card">
+          <span className="suggestion-label">Suggested response</span>
+          <p>{latest.content}</p>
+          <div className="suggestion-actions">
+            <button type="button" onClick={() => void run('ai-copy', copySuggestion)}>Copy</button>
+            <button type="button" onClick={() => void run('ai-like', () => controller.sendAssistanceFeedback(latest.id, 'likeButton'))}>Helpful</button>
+            <button type="button" onClick={() => void run('ai-dislike', () => controller.sendAssistanceFeedback(latest.id, 'dislikeButton'))}>Not helpful</button>
+          </div>
+        </article>
+      ) : (
+        <div className="insight-empty compact">
+          Ask AI Assistant for a response based on the active conversation.
+        </div>
+      )}
+      <label className="assist-context">
+        Optional context
+        <textarea
+          value={context}
+          maxLength={1000}
+          placeholder="Add a detail the assistant should consider"
+          onChange={(event) => setContext(event.target.value)}
+        />
+      </label>
+      <button
+        type="button"
+        className="button primary full"
+        disabled={busy !== '' || snapshot.aiAssistanceLoading}
+        onClick={() => void run('ai-assist', () => controller.requestAssistance(context))}
+      >
+        {snapshot.aiAssistanceLoading ? 'Requesting assistance…' : latest ? 'Refresh suggestion' : 'Get assistance'}
+      </button>
+      {snapshot.aiError && <div className="notice error-notice">{snapshot.aiError}</div>}
+    </div>
+  );
+}
+
+function SummaryView({snapshot, controller, busy, run}: InteractionInsightsProps) {
+  const summary = snapshot.postCallSummary || snapshot.midCallSummary;
+  const postCall = snapshot.callStatus === 'wrap-up' || snapshot.callStatus === 'ended';
+  return (
+    <div className="insight-content">
+      {summary ? (
+        <article className="summary-card">
+          <span className="suggestion-label">{snapshot.postCallSummary ? 'Post-call summary' : 'Mid-call summary'}</span>
+          <p>{summary}</p>
+        </article>
+      ) : (
+        <div className="insight-empty">
+          <strong>No summary generated</strong>
+          <span>Generate a concise summary when the AI summary feature is enabled for this interaction.</span>
+        </div>
+      )}
+      <button
+        type="button"
+        className="button secondary full"
+        disabled={busy !== '' || snapshot.aiSummaryLoading}
+        onClick={() => void run('ai-summary', () => controller.requestSummary(postCall ? 'post-call' : 'mid-call'))}
+      >
+        {snapshot.aiSummaryLoading ? 'Summary requested…' : `Generate ${postCall ? 'post-call' : 'mid-call'} summary`}
+      </button>
+    </div>
+  );
+}
+
+export function InteractionInsights(props: InteractionInsightsProps) {
+  const [tab, setTab] = useState<InsightTab>('context');
+  const {snapshot} = props;
+  const tabs: Array<{id: InsightTab; label: string; count?: number}> = [
+    {id: 'context', label: 'Context'},
+    {id: 'transcript', label: 'Transcript', count: snapshot.transcripts.length},
+    {id: 'assist', label: 'Assist', count: snapshot.aiSuggestions.length},
+    {id: 'summary', label: 'Summary'},
+  ];
+
+  return (
+    <aside className="insights-panel" aria-label="Interaction insights">
+      <div className="insight-tabs" role="tablist" aria-label="Interaction information">
+        {tabs.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === item.id}
+            className={tab === item.id ? 'is-active' : ''}
+            onClick={() => setTab(item.id)}
+          >
+            {item.label}{item.count ? <span>{item.count}</span> : null}
+          </button>
+        ))}
+      </div>
+      {tab === 'context' && <ContextView snapshot={snapshot} />}
+      {tab === 'transcript' && <TranscriptView snapshot={snapshot} />}
+      {tab === 'assist' && <AssistanceView {...props} />}
+      {tab === 'summary' && <SummaryView {...props} />}
+    </aside>
+  );
+}
