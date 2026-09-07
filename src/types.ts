@@ -97,6 +97,14 @@ export type TranscriptionStatus =
   | 'unavailable'
   | 'error';
 
+export type AIRequestStatus =
+  | 'idle'
+  | 'requesting'
+  | 'accepted'
+  | 'received'
+  | 'delayed'
+  | 'error';
+
 export interface ControllerSnapshot {
   lifecycle: LifecycleStatus;
   callStatus: CallStatus;
@@ -154,7 +162,11 @@ export interface ControllerSnapshot {
   transcriptionMessage: string;
   aiSuggestions: AiSuggestion[];
   aiAssistanceLoading: boolean;
+  aiAssistanceStatus: AIRequestStatus;
+  aiAssistanceMessage: string;
   aiSummaryLoading: boolean;
+  aiSummaryStatus: AIRequestStatus;
+  aiSummaryMessage: string;
   aiError: string;
   midCallSummary: string;
   postCallSummary: string;
@@ -245,7 +257,11 @@ export const initialSnapshot: ControllerSnapshot = {
   transcriptionMessage: '',
   aiSuggestions: [],
   aiAssistanceLoading: false,
+  aiAssistanceStatus: 'idle',
+  aiAssistanceMessage: '',
   aiSummaryLoading: false,
+  aiSummaryStatus: 'idle',
+  aiSummaryMessage: '',
   aiError: '',
   midCallSummary: '',
   postCallSummary: '',

@@ -181,7 +181,7 @@ function aiSuggestion(payload: any): AiSuggestion | undefined {
 }
 
 function aiSummary(payload: any): string {
-  return collectAssistantText(payload?.data ?? payload).find((value) => value.length > 2) ?? '';
+  return collectAssistantText(payload).find((value) => value.length > 2) ?? '';
 }
 
 function recordingPauseEnabled(task: ITask): boolean {
@@ -266,6 +266,39 @@ export class WebexPocController {
   private logSequence = 0;
   private observedTasks = new WeakSet<ITask>();
   private applicationTranscriptRequests = new Set<string>();
+  private aiAssistanceDelayTimer?: ReturnType<typeof globalThis.setTimeout>;
+  private aiSummaryDelayTimer?: ReturnType<typeof globalThis.setTimeout>;
+  private performanceRefreshTimer?: ReturnType<typeof globalThis.setTimeout>;
+  private rtdWebSocketManager?: {on: (event: string, listener: (payload: unknown) => void) => void; off?: (event: string, listener: (payload: unknown) => void) => void};
+
+  private handleRawAIEvent = (event: unknown): void => {
+    try {
+      const payload = typeof event === 'string' ? JSON.parse(event) : event;
+      const interactionId = firstText(
+        payload?.data?.data?.conversationId,
+        payload?.data?.conversationId,
+        payload?.conversationId,
+      );
+      if (!interactionId || interactionId !== this.task?.data.interactionId) return;
+
+      const type = firstText(payload?.type, payload?.eventName);
+      if (type === 'SUGGESTED_RESPONSE_ACKNOWLEDGE') {
+        this.update({
+          aiAssistanceStatus: 'accepted',
+          aiAssistanceMessage: 'AI Assist acknowledged the request and is preparing a suggestion.',
+        });
+        return;
+      }
+
+      if (type === 'MID_CALL_SUMMARY' || type === 'MID_CALL_SUMMARY_RESPONSE') {
+        this.receiveSummary('mid-call', payload?.data ?? payload);
+      } else if (type === 'POST_CALL_SUMMARY' || type === 'POST_CALL_SUMMARY_RESPONSE') {
+        this.receiveSummary('post-call', payload?.data ?? payload);
+      }
+    } catch {
+      // The SDK owns parsing and diagnostics for unrelated RTD messages.
+    }
+  };
 
   subscribe(listener: SnapshotListener): () => void {
     this.listeners.add(listener);
@@ -346,6 +379,7 @@ export class WebexPocController {
       this.attachContactCenterListeners();
       const profile = (await this.cc.register()) as Profile;
       this.profile = profile;
+      this.attachRawAIEvents();
       const teams = normalizeTeams(profile.teams);
       const recovered = recoveredAgentSession(profile);
       const loginVoiceOptions = profileLoginOptions(profile);
@@ -745,7 +779,13 @@ export class WebexPocController {
     if (!this.cc?.apiAIAssistant || !this.task || !this.profile) {
       throw new Error('AI assistance is not available for the active interaction.');
     }
-    this.update({aiAssistanceLoading: true, aiError: ''});
+    this.clearAIResponseTimer('assist');
+    this.update({
+      aiAssistanceLoading: true,
+      aiAssistanceStatus: 'requesting',
+      aiAssistanceMessage: 'Sending the assistance request…',
+      aiError: '',
+    });
     try {
       const response = await this.cc.apiAIAssistant.getRealTimeAssistance({
         agentId: this.profile.agentId,
@@ -760,13 +800,25 @@ export class WebexPocController {
             suggestion,
             ...this.snapshot.aiSuggestions.filter((item) => item.id !== suggestion.id),
           ].slice(0, 10),
+          aiAssistanceStatus: 'received',
+          aiAssistanceMessage: 'A new AI suggestion was received.',
         });
+      } else {
+        this.update({
+          aiAssistanceStatus: 'accepted',
+          aiAssistanceMessage: 'Request accepted. Waiting for the suggested-response event.',
+        });
+        this.scheduleAIResponseWarning('assist');
       }
       this.log('AI assistance requested.');
       reportBackendEvent('cc.ai_assistance', 'succeeded');
     } catch (error) {
       const message = errorMessage(error);
-      this.update({aiError: message});
+      this.update({
+        aiAssistanceStatus: 'error',
+        aiAssistanceMessage: 'AI Assist could not accept the request.',
+        aiError: message,
+      });
       reportBackendEvent('cc.ai_assistance', 'failed');
       this.fail('AI assistance request failed', error);
     } finally {
@@ -799,7 +851,13 @@ export class WebexPocController {
     if (!this.cc?.apiAIAssistant || !this.task || !this.profile) {
       throw new Error('AI summaries are not available for the active interaction.');
     }
-    this.update({aiSummaryLoading: true, aiError: ''});
+    this.clearAIResponseTimer('summary');
+    this.update({
+      aiSummaryLoading: true,
+      aiSummaryStatus: 'requesting',
+      aiSummaryMessage: `Requesting a ${kind === 'mid-call' ? 'mid-call' : 'post-call'} summary…`,
+      aiError: '',
+    });
     try {
       const response = await this.cc.apiAIAssistant.sendEvent(
         this.profile.agentId,
@@ -812,19 +870,26 @@ export class WebexPocController {
         'en',
       );
       const summary = aiSummary(response);
-      this.update({
-        aiSummaryLoading: false,
-        ...(summary
-          ? kind === 'mid-call'
-            ? {midCallSummary: summary}
-            : {postCallSummary: summary}
-          : {}),
-      });
+      if (summary) {
+        this.receiveSummary(kind, response);
+      } else {
+        this.update({
+          aiSummaryLoading: false,
+          aiSummaryStatus: 'accepted',
+          aiSummaryMessage: 'Request accepted. Waiting for the summary response event.',
+        });
+        this.scheduleAIResponseWarning('summary');
+      }
       this.log(`${kind === 'mid-call' ? 'Mid-call' : 'Post-call'} AI summary requested.`);
       reportBackendEvent('cc.ai_summary', 'succeeded', {action: kind});
     } catch (error) {
       const message = errorMessage(error);
-      this.update({aiSummaryLoading: false, aiError: message});
+      this.update({
+        aiSummaryLoading: false,
+        aiSummaryStatus: 'error',
+        aiSummaryMessage: 'The summary request failed.',
+        aiError: message,
+      });
       reportBackendEvent('cc.ai_summary', 'failed', {action: kind});
       this.fail('AI summary request failed', error);
     }
@@ -1025,6 +1090,7 @@ export class WebexPocController {
       this.log(`Wrap-up submitted: ${code.name}.`, 'success');
       reportBackendEvent('cc.wrapup', 'succeeded');
       this.clearCallState();
+      this.schedulePerformanceRefresh();
     } catch (error) {
       reportBackendEvent('cc.wrapup', 'failed');
       this.fail('Wrap-up failed', error);
@@ -1047,6 +1113,7 @@ export class WebexPocController {
       }
       if (this.cc) await this.cc.deregister();
       this.webex = undefined;
+      this.detachRawAIEvents();
       this.cc = undefined;
       this.profile = undefined;
       this.task = undefined;
@@ -1109,7 +1176,11 @@ export class WebexPocController {
           : 'Real-time transcription is not enabled in this agent profile.',
         aiSuggestions: [],
         aiAssistanceLoading: false,
+        aiAssistanceStatus: 'idle',
+        aiAssistanceMessage: '',
         aiSummaryLoading: false,
+        aiSummaryStatus: 'idle',
+        aiSummaryMessage: '',
         aiError: '',
         midCallSummary: '',
         postCallSummary: '',
@@ -1251,19 +1322,20 @@ export class WebexPocController {
       this.update({
         aiSuggestions: [suggestion, ...this.snapshot.aiSuggestions.filter((item) => item.id !== suggestion.id)].slice(0, 10),
         aiAssistanceLoading: false,
+        aiAssistanceStatus: 'received',
+        aiAssistanceMessage: 'A new AI suggestion was received.',
         aiError: '',
       });
+      this.clearAIResponseTimer('assist');
       this.log('AI suggested response received.', 'success');
     });
     task.on('MID_CALL_SUMMARY', (payload: unknown) => {
       if (this.task !== task) return;
-      const summary = aiSummary(payload);
-      if (summary) this.update({midCallSummary: summary, aiSummaryLoading: false, aiError: ''});
+      this.receiveSummary('mid-call', payload);
     });
     task.on('POST_CALL_SUMMARY', (payload: unknown) => {
       if (this.task !== task) return;
-      const summary = aiSummary(payload);
-      if (summary) this.update({postCallSummary: summary, aiSummaryLoading: false, aiError: ''});
+      this.receiveSummary('post-call', payload);
     });
     task.on('task:wrapup', () => {
       const startedAt = taskWrapupStartedAt(task, this.profile?.agentId) || Date.now();
@@ -1279,6 +1351,7 @@ export class WebexPocController {
       this.stopTranscription(task);
       this.log('WxCC task wrap-up completed.', 'success');
       this.clearCallState();
+      this.schedulePerformanceRefresh();
     });
     task.on('task:end', (endedTask?: ITask) => {
       const currentTask = endedTask ?? task;
@@ -1300,6 +1373,7 @@ export class WebexPocController {
 
       this.log('WxCC task ended; no wrap-up is required.', 'success');
       this.clearCallState();
+      this.schedulePerformanceRefresh();
     });
     task.on('task:error', (error: unknown) =>
       this.log(`WxCC task error: ${errorMessage(error)}`, 'error'),
@@ -1358,7 +1432,72 @@ export class WebexPocController {
       });
   }
 
+  private attachRawAIEvents(): void {
+    const manager = this.cc?.services?.rtdWebSocketManager as typeof this.rtdWebSocketManager;
+    if (!manager || manager === this.rtdWebSocketManager) return;
+    this.detachRawAIEvents();
+    this.rtdWebSocketManager = manager;
+    manager.on('message', this.handleRawAIEvent);
+  }
+
+  private detachRawAIEvents(): void {
+    this.rtdWebSocketManager?.off?.('message', this.handleRawAIEvent);
+    this.rtdWebSocketManager = undefined;
+  }
+
+  private clearAIResponseTimer(kind: 'assist' | 'summary'): void {
+    const timer = kind === 'assist' ? this.aiAssistanceDelayTimer : this.aiSummaryDelayTimer;
+    if (timer) globalThis.clearTimeout(timer);
+    if (kind === 'assist') this.aiAssistanceDelayTimer = undefined;
+    else this.aiSummaryDelayTimer = undefined;
+  }
+
+  private scheduleAIResponseWarning(kind: 'assist' | 'summary'): void {
+    this.clearAIResponseTimer(kind);
+    const timer = globalThis.setTimeout(() => {
+      if (kind === 'assist' && this.snapshot.aiAssistanceStatus === 'accepted') {
+        this.update({
+          aiAssistanceStatus: 'delayed',
+          aiAssistanceMessage: 'The request was accepted, but no suggested-response event has arrived yet. You can retry.',
+        });
+      }
+      if (kind === 'summary' && this.snapshot.aiSummaryStatus === 'accepted') {
+        this.update({
+          aiSummaryStatus: 'delayed',
+          aiSummaryMessage: 'The request was accepted, but no summary response event has arrived yet. You can retry.',
+        });
+      }
+    }, 20_000);
+    if (kind === 'assist') this.aiAssistanceDelayTimer = timer;
+    else this.aiSummaryDelayTimer = timer;
+  }
+
+  private receiveSummary(kind: 'mid-call' | 'post-call', payload: unknown): void {
+    const summary = aiSummary(payload);
+    if (!summary) return;
+    this.clearAIResponseTimer('summary');
+    this.update({
+      aiSummaryLoading: false,
+      aiSummaryStatus: 'received',
+      aiSummaryMessage: `${kind === 'mid-call' ? 'Mid-call' : 'Post-call'} summary received.`,
+      aiError: '',
+      ...(kind === 'mid-call' ? {midCallSummary: summary} : {postCallSummary: summary}),
+    });
+    this.log(`${kind === 'mid-call' ? 'Mid-call' : 'Post-call'} AI summary received.`, 'success');
+  }
+
+  private schedulePerformanceRefresh(): void {
+    if (!this.webex || !this.profile?.agentId) return;
+    if (this.performanceRefreshTimer) globalThis.clearTimeout(this.performanceRefreshTimer);
+    this.performanceRefreshTimer = globalThis.setTimeout(() => {
+      this.performanceRefreshTimer = undefined;
+      void this.loadPerformance();
+    }, 2_000);
+  }
+
   private clearCallState(): void {
+    this.clearAIResponseTimer('assist');
+    this.clearAIResponseTimer('summary');
     this.task = undefined;
     this.update({
       callStatus: 'none',
@@ -1399,7 +1538,11 @@ export class WebexPocController {
       transcriptionMessage: '',
       aiSuggestions: [],
       aiAssistanceLoading: false,
+      aiAssistanceStatus: 'idle',
+      aiAssistanceMessage: '',
       aiSummaryLoading: false,
+      aiSummaryStatus: 'idle',
+      aiSummaryMessage: '',
       aiError: '',
       midCallSummary: '',
       postCallSummary: '',

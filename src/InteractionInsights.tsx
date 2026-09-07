@@ -1,4 +1,4 @@
-import {useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import type {WebexPocController} from './WebexPocController';
 import type {ControllerSnapshot} from './types';
 
@@ -67,6 +67,9 @@ function ContextView({snapshot}: {snapshot: ControllerSnapshot}) {
 }
 
 function TranscriptView({snapshot, controller, busy, run}: InteractionInsightsProps) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const followTranscript = useRef(true);
+  const [newTranscriptBelow, setNewTranscriptBelow] = useState(false);
   const canRetry =
     snapshot.realtimeTranscriptionEnabled &&
     ['connected', 'held'].includes(snapshot.callStatus) &&
@@ -79,8 +82,37 @@ function TranscriptView({snapshot, controller, busy, run}: InteractionInsightsPr
         : 'Waiting for transcript audio.'
   );
 
+  const scrollToLatest = (behavior: ScrollBehavior = 'smooth') => {
+    const list = listRef.current;
+    if (!list) return;
+    followTranscript.current = true;
+    setNewTranscriptBelow(false);
+    if (typeof list.scrollTo === 'function') list.scrollTo({top: list.scrollHeight, behavior});
+    else list.scrollTop = list.scrollHeight;
+  };
+
+  useEffect(() => {
+    if (!snapshot.transcripts.length) return;
+    if (!followTranscript.current) {
+      setNewTranscriptBelow(true);
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => scrollToLatest('smooth'));
+    return () => window.cancelAnimationFrame(frame);
+  }, [snapshot.transcripts]);
+
   return (
-    <div className="insight-content transcript-list" aria-live="polite">
+    <div
+      ref={listRef}
+      className="insight-content transcript-list"
+      aria-live="polite"
+      onScroll={(event) => {
+        const list = event.currentTarget;
+        const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 72;
+        followTranscript.current = nearBottom;
+        if (nearBottom) setNewTranscriptBelow(false);
+      }}
+    >
       <div className={`transcription-status status-${snapshot.transcriptionStatus}`}>
         <span aria-hidden="true" />
         <p>{statusMessage}</p>
@@ -109,6 +141,11 @@ function TranscriptView({snapshot, controller, busy, run}: InteractionInsightsPr
           )}
         </div>
       )}
+      {newTranscriptBelow && (
+        <button type="button" className="new-transcript-button" onClick={() => scrollToLatest()}>
+          New transcript below
+        </button>
+      )}
     </div>
   );
 }
@@ -116,6 +153,7 @@ function TranscriptView({snapshot, controller, busy, run}: InteractionInsightsPr
 function AssistanceView({snapshot, controller, busy, run}: InteractionInsightsProps) {
   const [context, setContext] = useState('');
   const latest = snapshot.aiSuggestions[0];
+  const waitingForResponse = snapshot.aiAssistanceStatus === 'accepted';
 
   const copySuggestion = async () => {
     if (!latest) return;
@@ -140,6 +178,12 @@ function AssistanceView({snapshot, controller, busy, run}: InteractionInsightsPr
           Ask AI Assistant for a response based on the active conversation.
         </div>
       )}
+      {snapshot.aiAssistanceStatus !== 'idle' && (
+        <div className={`ai-request-status status-${snapshot.aiAssistanceStatus}`} role="status">
+          <span aria-hidden="true" />
+          <p>{snapshot.aiAssistanceMessage}</p>
+        </div>
+      )}
       <label className="assist-context">
         Optional context
         <textarea
@@ -152,10 +196,18 @@ function AssistanceView({snapshot, controller, busy, run}: InteractionInsightsPr
       <button
         type="button"
         className="button primary full"
-        disabled={busy !== '' || snapshot.aiAssistanceLoading}
+        disabled={busy !== '' || snapshot.aiAssistanceLoading || waitingForResponse}
         onClick={() => void run('ai-assist', () => controller.requestAssistance(context))}
       >
-        {snapshot.aiAssistanceLoading ? 'Requesting assistance…' : latest ? 'Refresh suggestion' : 'Get assistance'}
+        {snapshot.aiAssistanceLoading
+          ? 'Requesting assistance…'
+          : waitingForResponse
+            ? 'Waiting for response…'
+            : snapshot.aiAssistanceStatus === 'delayed'
+              ? 'Retry assistance'
+              : latest
+                ? 'Refresh suggestion'
+                : 'Get assistance'}
       </button>
       {snapshot.aiError && <div className="notice error-notice">{snapshot.aiError}</div>}
     </div>
@@ -165,6 +217,7 @@ function AssistanceView({snapshot, controller, busy, run}: InteractionInsightsPr
 function SummaryView({snapshot, controller, busy, run}: InteractionInsightsProps) {
   const summary = snapshot.postCallSummary || snapshot.midCallSummary;
   const postCall = snapshot.callStatus === 'wrap-up' || snapshot.callStatus === 'ended';
+  const waitingForResponse = snapshot.aiSummaryStatus === 'accepted';
   return (
     <div className="insight-content">
       {summary ? (
@@ -178,13 +231,25 @@ function SummaryView({snapshot, controller, busy, run}: InteractionInsightsProps
           <span>Generate a concise summary when the AI summary feature is enabled for this interaction.</span>
         </div>
       )}
+      {snapshot.aiSummaryStatus !== 'idle' && (
+        <div className={`ai-request-status status-${snapshot.aiSummaryStatus}`} role="status">
+          <span aria-hidden="true" />
+          <p>{snapshot.aiSummaryMessage}</p>
+        </div>
+      )}
       <button
         type="button"
         className="button secondary full"
-        disabled={busy !== '' || snapshot.aiSummaryLoading}
+        disabled={busy !== '' || snapshot.aiSummaryLoading || waitingForResponse}
         onClick={() => void run('ai-summary', () => controller.requestSummary(postCall ? 'post-call' : 'mid-call'))}
       >
-        {snapshot.aiSummaryLoading ? 'Summary requested…' : `Generate ${postCall ? 'post-call' : 'mid-call'} summary`}
+        {snapshot.aiSummaryLoading
+          ? 'Sending summary request…'
+          : waitingForResponse
+            ? 'Waiting for summary…'
+            : snapshot.aiSummaryStatus === 'delayed'
+              ? 'Retry summary'
+              : `Generate ${postCall ? 'post-call' : 'mid-call'} summary`}
       </button>
     </div>
   );

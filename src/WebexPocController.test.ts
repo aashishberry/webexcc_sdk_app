@@ -130,6 +130,43 @@ describe('WebexPocController performance', () => {
       error: '',
     });
   });
+
+  it('refreshes performance after a completed interaction returns to the home view', async () => {
+    vi.useFakeTimers();
+    getAgentPerformanceMock.mockClear();
+    getAgentPerformanceMock.mockResolvedValue({
+      available: true,
+      performance: {
+        source: 'graphql-search',
+        from: 1,
+        to: 2,
+        handled: 8,
+        averageConnectedSeconds: 80,
+        averageHoldSeconds: 8,
+        averageWrapupSeconds: 12,
+      },
+    });
+    const controller = new WebexPocController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      webex: {internal: {services: {get: () => string}}};
+      profile: Profile;
+      task: ITask;
+    };
+    internal.webex = {
+      internal: {services: {get: () => 'https://api.wxcc-us1.cisco.com'}},
+    };
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    internal.task = task;
+    observeTask(controller, task);
+
+    task.emitTest('task:end');
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(getAgentPerformanceMock).toHaveBeenCalledOnce();
+    expect(controller.getSnapshot().performance?.handled).toBe(8);
+    vi.useRealTimers();
+  });
 });
 
 describe('WebexPocController station login', () => {
@@ -310,6 +347,75 @@ describe('WebexPocController transcription', () => {
 
     expect(sendEvent).not.toHaveBeenCalled();
     expect(controller.getSnapshot().transcriptionStatus).toBe('unavailable');
+  });
+});
+
+describe('WebexPocController AI response lifecycle', () => {
+  it('distinguishes an accepted assistance request from a received suggestion', async () => {
+    const controller = new WebexPocController();
+    const task = fakeTask(false);
+    const getRealTimeAssistance = vi.fn(async () => ({}));
+    const internal = controller as unknown as {
+      cc: {apiAIAssistant: {getRealTimeAssistance: typeof getRealTimeAssistance}};
+      profile: Profile;
+      task: ITask;
+    };
+    internal.cc = {apiAIAssistant: {getRealTimeAssistance}};
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    internal.task = task;
+    observeTask(controller, task);
+
+    await controller.requestAssistance();
+
+    expect(controller.getSnapshot()).toMatchObject({
+      aiAssistanceLoading: false,
+      aiAssistanceStatus: 'accepted',
+      aiAssistanceMessage: expect.stringContaining('Waiting'),
+    });
+
+    task.emitTest('SUGGESTED_RESPONSE', {
+      data: {adaptiveCardId: 'card-1', content: 'Suggested response content'},
+    });
+
+    expect(controller.getSnapshot()).toMatchObject({
+      aiAssistanceStatus: 'received',
+      aiSuggestions: [expect.objectContaining({adaptiveCardId: 'card-1'})],
+    });
+  });
+
+  it('accepts summary requests and consumes the declared raw RTD summary event', async () => {
+    const controller = new WebexPocController();
+    const task = fakeTask(false);
+    const sendEvent = vi.fn(async () => ({}));
+    const internal = controller as unknown as {
+      cc: {apiAIAssistant: {sendEvent: typeof sendEvent}};
+      profile: Profile;
+      task: ITask;
+      handleRawAIEvent: (event: string) => void;
+    };
+    internal.cc = {apiAIAssistant: {sendEvent}};
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    internal.task = task;
+
+    await controller.requestSummary('mid-call');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      aiSummaryLoading: false,
+      aiSummaryStatus: 'accepted',
+      aiSummaryMessage: expect.stringContaining('Waiting'),
+    });
+
+    internal.handleRawAIEvent(JSON.stringify({
+      type: 'MID_CALL_SUMMARY',
+      data: {
+        data: {conversationId: 'interaction-1'},
+        summary: 'Customer asked about the current plan.',
+      },
+    }));
+    expect(controller.getSnapshot()).toMatchObject({
+      aiSummaryStatus: 'received',
+      midCallSummary: 'Customer asked about the current plan.',
+    });
   });
 });
 

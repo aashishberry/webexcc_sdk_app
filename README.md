@@ -168,7 +168,7 @@ Conference rows are reconstructed only while the SDK participant map is unavaila
 
 ## Interaction insights and AI
 
-The active interaction uses a compact caller rail beside a large conversation workspace. Transcript opens by default; incoming and connected-call actions occupy a bottom dock spanning the workspace. At tablet and mobile widths the caller rail and conversation workspace stack, while the same control dock becomes sticky and uses a three-column grid.
+The active interaction uses a compact caller rail beside a large conversation workspace. Transcript opens by default and follows new utterances while the agent remains at the bottom; scrolling up pauses follow mode and shows a New transcript control. Incoming, connected-call, consult/transfer destination, keypad, and wrap-up actions share a bottom dock. Destination and keypad controls open as upward dock popovers so short viewports do not place them behind the controls. At tablet and mobile widths the caller rail and conversation workspace stack, while the same control dock becomes sticky and uses a three-column grid.
 
 The conversation workspace exposes five views:
 
@@ -178,7 +178,7 @@ The conversation workspace exposes five views:
 - Statistics: the current-day performance snapshot and its manual refresh action.
 - Call details: caller identity plus queue, reason, IVR path, entry point, and language when supplied by task data.
 
-The UI renders empty states when the tenant, agent profile, or interaction does not enable an AI or reporting capability. It does not invent transcript, summary, queue, or performance values.
+The UI renders empty states when the tenant, agent profile, or interaction does not enable an AI or reporting capability. It does not invent transcript, summary, queue, or performance values. Assist and summary controls distinguish request submission, backend acceptance, response receipt, delayed response, and request failure. The HTTP result is not presented as generated AI content; a suggestion or summary becomes successful only when content is returned synchronously or received through its declared event.
 
 When `profile.aiFeature.realtimeTranscripts.enable` is true, the console explicitly sends `GET_TRANSCRIPTS` with `action: START` after `task:assigned`. This supplements the SDK's automatic transcript lifecycle and covers task sequences where the later media-fork update does not cause the SDK to issue the start request. The application deduplicates its own start request per interaction, reports request status in the Transcript tab, and exposes a retry after a failed request. The first `REAL_TIME_TRANSCRIPTION` event moves the presentation from requested to active. On task end or wrap-up, an application-started stream is paired with `action: STOP`.
 
@@ -191,7 +191,7 @@ After Contact Center registration, the controller resolves the SDK-discovered re
 - average hold duration; and
 - average wrap-up duration.
 
-Durations returned in milliseconds are normalized to seconds before entering the controller snapshot. The browser's local midnight defines the beginning of “Today.” A denied role, unavailable regional service, or rejected tenant schema changes only the reporting state; it does not fail SDK initialization, station login, agent state, or active call controls. The cards include a manual refresh action because historical reporting ingestion is not guaranteed to be immediate.
+Durations returned in milliseconds are normalized to seconds before entering the controller snapshot. The browser's local midnight defines the beginning of “Today,” and the query ends at the instant it is requested. Performance refreshes two seconds after a completed task returns the agent to the home view; the manual refresh remains available because historical reporting ingestion is not guaranteed to be immediate. A denied role, unavailable regional service, or rejected tenant schema changes only the reporting state; it does not fail SDK initialization, station login, agent state, or active call controls.
 
 Reporting references:
 

@@ -974,27 +974,7 @@ export function App() {
                     </div>
                   </details>
 
-                  {wrapupActive ? (
-                    <div className="wrapup-panel">
-                      <p>Calling media has ended. Complete the Contact Center task with a wrap-up reason.</p>
-                      <div className="wrapup-row">
-                        <SelectMenu
-                          ariaLabel="Wrap-up reason"
-                          value={snapshot.selectedWrapupCode}
-                          options={wrapupMenuOptions}
-                          placeholder="Select wrap-up reason"
-                          onChange={(value) => controller.selectWrapupCode(value)}
-                        />
-                        <button
-                          className="button primary"
-                          disabled={!snapshot.selectedWrapupCode || busy !== ''}
-                          onClick={() => run('wrapup', () => controller.wrapup())}
-                        >
-                          {busy === 'wrapup' ? 'Completing…' : 'Complete wrap-up'}
-                        </button>
-                      </div>
-                    </div>
-                  ) : snapshot.callStatus === 'ended' ? (
+                  {wrapupActive ? null : snapshot.callStatus === 'ended' ? (
                     <div className="notice pending-notice">
                       Calling media has ended. Waiting for Contact Center to confirm whether wrap-up is required.
                     </div>
@@ -1003,55 +983,6 @@ export function App() {
                       {snapshot.callStatus === 'ringing' && !canAnswer && (
                         <div className="notice pending-notice station-answer-hint">
                           Answer this interaction on {stationConnectionLabel.toLowerCase()}.
-                        </div>
-                      )}
-
-                      {dialpadOpen && (
-                        <div id="dtmf-dialpad" className="dialpad" aria-label="DTMF dial pad">
-                          {digits.map((digit) => (
-                            <button
-                              key={digit}
-                              disabled={busy !== '' || !snapshot.dtmfCapable}
-                              onClick={() => run(`dtmf-${digit}`, () => controller.sendDigit(digit))}
-                            >{digit}</button>
-                          ))}
-                        </div>
-                      )}
-
-                      {activeRouteMode && !snapshot.consultActive && (
-                        <div className="call-control-sheet">
-                          <div className="sheet-heading">
-                            <div>
-                              <strong>{activeRouteMode === 'consult' ? 'Consult a destination' : 'Transfer call'}</strong>
-                              <span>{activeRouteMode === 'consult' ? 'The caller will be held while you consult.' : 'This immediately transfers the interaction.'}</span>
-                            </div>
-                            <button type="button" aria-label="Close" onClick={() => setRouteMode('')}>
-                              <ControlIcon name="close" />
-                            </button>
-                          </div>
-                          <SelectMenu
-                            ariaLabel={`${activeRouteMode} destination`}
-                            value={destinationId}
-                            options={destinationMenuOptions}
-                            disabled={busy === 'destinations'}
-                            placeholder={busy === 'destinations' ? 'Loading destinations…' : 'Select an agent or queue'}
-                            onChange={setDestinationId}
-                          />
-                          {snapshot.destinationsLoaded && destinationMenuOptions.length === 0 && (
-                            <p className="empty-destinations">No eligible agents or telephony queues were returned.</p>
-                          )}
-                          <button
-                            className="button primary full sheet-submit"
-                            disabled={!destinationId || busy !== ''}
-                            onClick={() => run(activeRouteMode, async () => {
-                              if (activeRouteMode === 'consult') await controller.consult(destinationId);
-                              else await controller.transfer(destinationId);
-                              setRouteMode('');
-                              setRouteTaskId('');
-                            })}
-                          >
-                            {activeRouteMode === 'consult' ? 'Start consult' : 'Transfer now'}
-                          </button>
                         </div>
                       )}
 
@@ -1163,9 +1094,30 @@ export function App() {
           />
         )}
 
-        {stationLoggedIn && ['ringing', 'answering', 'connected', 'held'].includes(snapshot.callStatus) && (
+        {stationLoggedIn && ['ringing', 'answering', 'connected', 'held', 'wrap-up'].includes(snapshot.callStatus) && (
           <section className="call-control-dock" aria-label="Call controls">
-            {['ringing', 'answering'].includes(snapshot.callStatus) ? (
+            {wrapupActive ? (
+              <div className="dock-wrapup">
+                <div className="dock-wrapup-copy">
+                  <strong>Complete wrap-up</strong>
+                  <span>Select a reason to finish this interaction.</span>
+                </div>
+                <SelectMenu
+                  ariaLabel="Wrap-up reason"
+                  value={snapshot.selectedWrapupCode}
+                  options={wrapupMenuOptions}
+                  placeholder="Select wrap-up reason"
+                  onChange={(value) => controller.selectWrapupCode(value)}
+                />
+                <button
+                  className="button primary"
+                  disabled={!snapshot.selectedWrapupCode || busy !== ''}
+                  onClick={() => run('wrapup', () => controller.wrapup())}
+                >
+                  {busy === 'wrapup' ? 'Completing…' : 'Complete'}
+                </button>
+              </div>
+            ) : ['ringing', 'answering'].includes(snapshot.callStatus) ? (
               <div className="button-row call-actions">
                 <button
                   className="call-primary-action answer-call"
@@ -1186,68 +1138,121 @@ export function App() {
               </div>
             ) : (
               <>
+                {dialpadOpen && (
+                  <div className="dock-popover dialpad-popover">
+                    <div id="dtmf-dialpad" className="dialpad" aria-label="DTMF dial pad">
+                      {digits.map((digit) => (
+                        <button
+                          key={digit}
+                          disabled={busy !== '' || !snapshot.dtmfCapable}
+                          onClick={() => run(`dtmf-${digit}`, () => controller.sendDigit(digit))}
+                        >{digit}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {activeRouteMode && !snapshot.consultActive && (
+                  <div className="dock-popover route-popover">
+                    <div className="call-control-sheet">
+                      <div className="sheet-heading">
+                        <div>
+                          <strong>{activeRouteMode === 'consult' ? 'Consult a destination' : 'Transfer call'}</strong>
+                          <span>{activeRouteMode === 'consult' ? 'The caller will be held while you consult.' : 'This immediately transfers the interaction.'}</span>
+                        </div>
+                        <button type="button" aria-label="Close" onClick={() => setRouteMode('')}>
+                          <ControlIcon name="close" />
+                        </button>
+                      </div>
+                      <SelectMenu
+                        ariaLabel={`${activeRouteMode} destination`}
+                        value={destinationId}
+                        options={destinationMenuOptions}
+                        disabled={busy === 'destinations'}
+                        placeholder={busy === 'destinations' ? 'Loading destinations…' : 'Select an agent or queue'}
+                        onChange={setDestinationId}
+                      />
+                      {snapshot.destinationsLoaded && destinationMenuOptions.length === 0 && (
+                        <p className="empty-destinations">No eligible agents or telephony queues were returned.</p>
+                      )}
+                      <button
+                        className="button primary full sheet-submit"
+                        disabled={!destinationId || busy !== ''}
+                        onClick={() => run(activeRouteMode, async () => {
+                          if (activeRouteMode === 'consult') await controller.consult(destinationId);
+                          else await controller.transfer(destinationId);
+                          setRouteMode('');
+                          setRouteTaskId('');
+                        })}
+                      >
+                        {activeRouteMode === 'consult' ? 'Start consult' : 'Transfer now'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="mobile-call-controls">
-              <button
-                className={`phone-control ${snapshot.muted ? 'active' : ''}`}
-                disabled={busy !== '' || !snapshot.muteCapable}
-                onClick={() => run('mute', () => controller.toggleMute())}
-              >
-                <span><ControlIcon name="mute" /></span>
-                <small>{snapshot.muted ? 'Unmute' : 'Mute'}</small>
-              </button>
-              <button
-                className={`phone-control ${snapshot.held ? 'active' : ''}`}
-                disabled={busy !== '' || !snapshot.holdCapable}
-                onClick={() => run('hold', () => controller.toggleHold())}
-              >
-                <span><ControlIcon name="hold" /></span>
-                <small>{snapshot.held ? 'Resume' : 'Hold'}</small>
-              </button>
-              <button
-                className={`phone-control ${dialpadOpen ? 'active' : ''}`}
-                disabled={busy !== '' || !snapshot.dtmfCapable}
-                aria-expanded={dialpadOpen}
-                aria-controls="dtmf-dialpad"
-                onClick={() => {
-                  setRouteMode('');
-                  setDialpadTaskId(dialpadOpen ? '' : snapshot.interactionId);
-                }}
-              >
-                <span><ControlIcon name="keypad" /></span>
-                <small>Keypad</small>
-              </button>
-              <button
-                className={`phone-control ${snapshot.recordingPaused ? 'active warning-active' : ''}`}
-                disabled={busy !== '' || !snapshot.recordingPauseCapable}
-                title={snapshot.recordingPauseCapable ? '' : 'Recording pause is not enabled for this interaction'}
-                onClick={() => run('recording', () => controller.toggleRecording())}
-              >
-                <span><ControlIcon name="record" /></span>
-                <small>{snapshot.recordingPaused ? 'Resume rec.' : 'Pause rec.'}</small>
-              </button>
-              <button
-                className={`phone-control ${activeRouteMode === 'consult' || snapshot.consultActive || snapshot.conferenceActive ? 'active' : ''}`}
-                disabled={busy !== '' || snapshot.consultActive || (!snapshot.conferenceActive && !snapshot.consultCapable)}
-                onClick={() => {
-                  setDialpadTaskId('');
-                  if (snapshot.conferenceActive) setParticipantsOpen((open) => !open);
-                  else void openRoutePanel('consult');
-                }}
-              >
-                <span><ControlIcon name={snapshot.conferenceActive ? 'participants' : 'consult'} /></span>
-                <small>{snapshot.conferenceActive ? 'Participants' : 'Consult'}</small>
-              </button>
-              <button
-                className={`phone-control ${activeRouteMode === 'transfer' ? 'active' : ''}`}
-                disabled={busy !== '' || snapshot.consultActive || snapshot.conferenceActive || !snapshot.transferCapable}
-                onClick={() => {
-                  setDialpadTaskId('');
-                  void openRoutePanel('transfer');
-                }}
-              >
-                <span><ControlIcon name="transfer" /></span>
-                <small>Transfer</small>
-              </button>
+                  <button
+                    className={`phone-control ${snapshot.muted ? 'active' : ''}`}
+                    disabled={busy !== '' || !snapshot.muteCapable}
+                    onClick={() => run('mute', () => controller.toggleMute())}
+                  >
+                    <span><ControlIcon name="mute" /></span>
+                    <small>{snapshot.muted ? 'Unmute' : 'Mute'}</small>
+                  </button>
+                  <button
+                    className={`phone-control ${snapshot.held ? 'active' : ''}`}
+                    disabled={busy !== '' || !snapshot.holdCapable}
+                    onClick={() => run('hold', () => controller.toggleHold())}
+                  >
+                    <span><ControlIcon name="hold" /></span>
+                    <small>{snapshot.held ? 'Resume' : 'Hold'}</small>
+                  </button>
+                  <button
+                    className={`phone-control ${dialpadOpen ? 'active' : ''}`}
+                    disabled={busy !== '' || !snapshot.dtmfCapable}
+                    aria-expanded={dialpadOpen}
+                    aria-controls="dtmf-dialpad"
+                    onClick={() => {
+                      setRouteMode('');
+                      setDialpadTaskId(dialpadOpen ? '' : snapshot.interactionId);
+                    }}
+                  >
+                    <span><ControlIcon name="keypad" /></span>
+                    <small>Keypad</small>
+                  </button>
+                  <button
+                    className={`phone-control ${snapshot.recordingPaused ? 'active warning-active' : ''}`}
+                    disabled={busy !== '' || !snapshot.recordingPauseCapable}
+                    title={snapshot.recordingPauseCapable ? '' : 'Recording pause is not enabled for this interaction'}
+                    onClick={() => run('recording', () => controller.toggleRecording())}
+                  >
+                    <span><ControlIcon name="record" /></span>
+                    <small>{snapshot.recordingPaused ? 'Resume rec.' : 'Pause rec.'}</small>
+                  </button>
+                  <button
+                    className={`phone-control ${activeRouteMode === 'consult' || snapshot.consultActive || snapshot.conferenceActive ? 'active' : ''}`}
+                    disabled={busy !== '' || snapshot.consultActive || (!snapshot.conferenceActive && !snapshot.consultCapable)}
+                    onClick={() => {
+                      setDialpadTaskId('');
+                      if (snapshot.conferenceActive) setParticipantsOpen((open) => !open);
+                      else void openRoutePanel('consult');
+                    }}
+                  >
+                    <span><ControlIcon name={snapshot.conferenceActive ? 'participants' : 'consult'} /></span>
+                    <small>{snapshot.conferenceActive ? 'Participants' : 'Consult'}</small>
+                  </button>
+                  <button
+                    className={`phone-control ${activeRouteMode === 'transfer' ? 'active' : ''}`}
+                    disabled={busy !== '' || snapshot.consultActive || snapshot.conferenceActive || !snapshot.transferCapable}
+                    onClick={() => {
+                      setDialpadTaskId('');
+                      void openRoutePanel('transfer');
+                    }}
+                  >
+                    <span><ControlIcon name="transfer" /></span>
+                    <small>Transfer</small>
+                  </button>
                 </div>
                 <button
                   className="end-call-button"
