@@ -12,6 +12,25 @@ interface CallAlertOptions {
 
 type WebkitWindow = Window & typeof globalThis & {webkitAudioContext?: typeof AudioContext};
 
+const alertPreferenceKey = 'webex-agent-console:call-alerts';
+
+function initialAlertPreference() {
+  if (typeof window === 'undefined') return true;
+  try {
+    return window.sessionStorage.getItem(alertPreferenceKey) !== 'disabled';
+  } catch {
+    return true;
+  }
+}
+
+function saveAlertPreference(enabled: boolean) {
+  try {
+    window.sessionStorage.setItem(alertPreferenceKey, enabled ? 'enabled' : 'disabled');
+  } catch {
+    // A restricted storage context should not prevent call alerts in this tab.
+  }
+}
+
 export function useCallAlerts({
   ringing,
   callKey,
@@ -21,7 +40,7 @@ export function useCallAlerts({
   onAnswer,
   onDecline,
 }: CallAlertOptions) {
-  const [enabled, setEnabled] = useState(false);
+  const [enabled, setEnabled] = useState(initialAlertPreference);
   const [permission, setPermission] = useState<NotificationPermission>(
     typeof Notification === 'undefined' ? 'denied' : Notification.permission,
   );
@@ -134,28 +153,45 @@ export function useCallAlerts({
 
   useEffect(() => () => stopRinging(), [stopRinging]);
 
-  const toggle = useCallback(async () => {
-    if (enabled) {
-      setEnabled(false);
-      stopRinging();
-      notificationSignature.current = '';
-      await closeNotification();
-      return;
-    }
+  const prepare = useCallback(async () => {
     const AudioContextConstructor =
       window.AudioContext || (window as WebkitWindow).webkitAudioContext;
+    let audioReady: Promise<void> | undefined;
     if (AudioContextConstructor) {
       audioContext.current ??= new AudioContextConstructor();
-      await audioContext.current.resume();
+      audioReady = audioContext.current.resume().catch(() => undefined);
     }
+    let permissionReady: Promise<NotificationPermission> | undefined;
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      const result = await Notification.requestPermission();
+      permissionReady = Notification.requestPermission().catch(() => Notification.permission);
+    }
+    await audioReady;
+    if (permissionReady) {
+      const result = await permissionReady;
       setPermission(result);
     } else if (typeof Notification !== 'undefined') {
       setPermission(Notification.permission);
     }
-    setEnabled(true);
-  }, [closeNotification, enabled, stopRinging]);
+  }, []);
 
-  return {enabled, permission, toggle};
+  const enable = useCallback(async () => {
+    setEnabled(true);
+    saveAlertPreference(true);
+    await prepare();
+  }, [prepare]);
+
+  const disable = useCallback(async () => {
+    setEnabled(false);
+    saveAlertPreference(false);
+    stopRinging();
+    notificationSignature.current = '';
+    await closeNotification();
+  }, [closeNotification, stopRinging]);
+
+  const toggle = useCallback(async () => {
+    if (enabled) await disable();
+    else await enable();
+  }, [disable, enable, enabled]);
+
+  return {enabled, permission, enable, prepare, toggle};
 }

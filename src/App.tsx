@@ -336,6 +336,7 @@ export function App() {
   };
 
   const initialize = async () => {
+    if (callAlerts.enabled) await callAlerts.prepare();
     await controller.initialize(form);
     const registered = controller.getSnapshot();
     const selectedMode = registered.loginVoiceOptions.includes(stationMode)
@@ -372,6 +373,7 @@ export function App() {
   };
 
   const stationLogin = async () => {
+    if (callAlerts.enabled) await callAlerts.prepare();
     if (stationMode === 'BROWSER' && microphoneStatus !== 'ready') {
       await prepareBrowserAudio();
     }
@@ -463,7 +465,9 @@ export function App() {
           <button
             className="button primary oauth-button"
             disabled={!oauth.configured}
-            onClick={() => window.location.assign('/api/oauth/login')}
+            onClick={() => void callAlerts.enable().finally(() => {
+              window.location.assign('/api/oauth/login');
+            })}
           >
             Continue with Webex
           </button>
@@ -495,7 +499,13 @@ export function App() {
             aria-pressed={callAlerts.enabled}
             title={
               callAlerts.enabled
-                ? `Call alerts enabled${callAlerts.permission === 'denied' ? ' · system notifications blocked' : ''}`
+                ? `Call alerts enabled${
+                    callAlerts.permission === 'denied'
+                      ? ' · system notifications blocked'
+                      : callAlerts.permission === 'default'
+                        ? ' · notification permission will be requested'
+                        : ''
+                  }`
                 : 'Enable call alerts'
             }
             disabled={busy !== ''}

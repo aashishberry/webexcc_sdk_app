@@ -53,7 +53,7 @@ The Contact Center SDK connects directly from the browser to Webex services, rou
 | `callingApi.ts` | Typed same-origin client for server routes |
 | `stationConfiguration.ts` | Extension and endpoint normalization and selection policy |
 | `sessionRecovery.ts` | Minimal recovery hint storage and SDK profile-to-UI state mapping |
-| `useCallAlerts.ts` | Ringtone, notification permission, visibility behavior, and service-worker messages |
+| `useCallAlerts.ts` | Default-on per-tab alert preference, ringtone, notification permission, visibility behavior, and service-worker messages |
 | `call-alert-sw.js` | Notification click/action delivery to an existing browser client |
 | `backendDiagnostics.ts` | Fire-and-forget delivery of allowlisted Contact Center lifecycle events to the server |
 

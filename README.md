@@ -252,7 +252,7 @@ Recovery requires the Express OAuth session to remain available. The current in-
 
 ## Browser call alerts
 
-The Alerts control performs two explicit user-authorized operations:
+Alerts default to enabled after sign-in. The OAuth action requests notification permission, and the next explicit initialize or station-login action also prepares alerts when necessary. The Alerts control remains available as an opt-out for the current browser tab and performs two user-authorized operations:
 
 - Resumes a Web Audio context for the ringtone.
 - Requests browser notification permission.
