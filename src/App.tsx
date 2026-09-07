@@ -618,7 +618,7 @@ export function App() {
       )}
 
       <div className={`console-layout ${stationLoggedIn && activeInteraction ? 'has-insights' : ''}`}>
-        <section className="panel flow-panel">
+        <section className={`panel flow-panel ${stationLoggedIn && activeInteraction ? 'interaction-sidebar' : ''}`}>
           {!stationLoggedIn ? (
             <>
               <div className="panel-heading">
@@ -1000,97 +1000,10 @@ export function App() {
                     </div>
                   ) : (
                     <>
-                      {['ringing', 'answering'].includes(snapshot.callStatus) && (
-                      <div className="button-row call-actions">
-                        <button
-                          className="call-primary-action answer-call"
-                          disabled={!canAnswer || busy !== ''}
-                          onClick={() => run('answer', () => controller.answer())}
-                        >
-                          <span className="call-action-icon"><ControlIcon name="phone" /></span>
-                          <span>{busy === 'answer' ? 'Answering…' : 'Answer'}</span>
-                        </button>
-                        <button
-                          className="call-primary-action decline-call"
-                          disabled={!canDecline || busy !== ''}
-                          onClick={() => run('decline', () => controller.decline())}
-                        >
-                          <span className="call-action-icon"><ControlIcon name="phone" /></span>
-                          <span>{busy === 'decline' ? 'Declining…' : 'Decline'}</span>
-                        </button>
-                      </div>
-                      )}
-
                       {snapshot.callStatus === 'ringing' && !canAnswer && (
                         <div className="notice pending-notice station-answer-hint">
                           Answer this interaction on {stationConnectionLabel.toLowerCase()}.
                         </div>
-                      )}
-
-                      {['connected', 'held'].includes(snapshot.callStatus) && (
-                      <div className="mobile-call-controls">
-                        <button
-                          className={`phone-control ${snapshot.muted ? 'active' : ''}`}
-                          disabled={busy !== '' || !snapshot.muteCapable || !['connected', 'held'].includes(snapshot.callStatus)}
-                          onClick={() => run('mute', () => controller.toggleMute())}
-                        >
-                          <span><ControlIcon name="mute" /></span>
-                          <small>{snapshot.muted ? 'Unmute' : 'Mute'}</small>
-                        </button>
-                        <button
-                          className={`phone-control ${snapshot.held ? 'active' : ''}`}
-                          disabled={busy !== '' || !snapshot.holdCapable}
-                          onClick={() => run('hold', () => controller.toggleHold())}
-                        >
-                          <span><ControlIcon name="hold" /></span>
-                          <small>{snapshot.held ? 'Resume' : 'Hold'}</small>
-                        </button>
-                        <button
-                          className={`phone-control ${dialpadOpen ? 'active' : ''}`}
-                          disabled={busy !== '' || !snapshot.dtmfCapable}
-                          aria-expanded={dialpadOpen}
-                          aria-controls="dtmf-dialpad"
-                          onClick={() => {
-                            setRouteMode('');
-                            setDialpadTaskId(dialpadOpen ? '' : snapshot.interactionId);
-                          }}
-                        >
-                          <span><ControlIcon name="keypad" /></span>
-                          <small>Keypad</small>
-                        </button>
-                        <button
-                          className={`phone-control ${snapshot.recordingPaused ? 'active warning-active' : ''}`}
-                          disabled={busy !== '' || !snapshot.recordingPauseCapable}
-                          title={snapshot.recordingPauseCapable ? '' : 'Recording pause is not enabled for this interaction'}
-                          onClick={() => run('recording', () => controller.toggleRecording())}
-                        >
-                          <span><ControlIcon name="record" /></span>
-                          <small>{snapshot.recordingPaused ? 'Resume rec.' : 'Pause rec.'}</small>
-                        </button>
-                        <button
-                          className={`phone-control ${activeRouteMode === 'consult' || snapshot.consultActive || snapshot.conferenceActive ? 'active' : ''}`}
-                          disabled={busy !== '' || snapshot.consultActive || (!snapshot.conferenceActive && !snapshot.consultCapable)}
-                          onClick={() => {
-                            setDialpadTaskId('');
-                            if (snapshot.conferenceActive) setParticipantsOpen((open) => !open);
-                            else void openRoutePanel('consult');
-                          }}
-                        >
-                          <span><ControlIcon name={snapshot.conferenceActive ? 'participants' : 'consult'} /></span>
-                          <small>{snapshot.conferenceActive ? 'Participants' : 'Consult'}</small>
-                        </button>
-                        <button
-                          className={`phone-control ${activeRouteMode === 'transfer' ? 'active' : ''}`}
-                          disabled={busy !== '' || snapshot.consultActive || snapshot.conferenceActive || !snapshot.transferCapable}
-                          onClick={() => {
-                            setDialpadTaskId('');
-                            void openRoutePanel('transfer');
-                          }}
-                        >
-                          <span><ControlIcon name="transfer" /></span>
-                          <small>Transfer</small>
-                        </button>
-                      </div>
                       )}
 
                       {dialpadOpen && (
@@ -1233,16 +1146,6 @@ export function App() {
                         </div>
                       )}
 
-                      {['connected', 'held'].includes(snapshot.callStatus) && (
-                        <button
-                          className="end-call-button"
-                          disabled={busy !== '' || !snapshot.endCapable}
-                          onClick={() => run('end', () => controller.endCall())}
-                        >
-                          <span><ControlIcon name="phone" /></span>
-                          End call
-                        </button>
-                      )}
                     </>
                   )}
                 </>
@@ -1258,6 +1161,105 @@ export function App() {
             busy={busy}
             run={run}
           />
+        )}
+
+        {stationLoggedIn && ['ringing', 'answering', 'connected', 'held'].includes(snapshot.callStatus) && (
+          <section className="call-control-dock" aria-label="Call controls">
+            {['ringing', 'answering'].includes(snapshot.callStatus) ? (
+              <div className="button-row call-actions">
+                <button
+                  className="call-primary-action answer-call"
+                  disabled={!canAnswer || busy !== ''}
+                  onClick={() => run('answer', () => controller.answer())}
+                >
+                  <span className="call-action-icon"><ControlIcon name="phone" /></span>
+                  <span>{busy === 'answer' ? 'Answering…' : 'Answer'}</span>
+                </button>
+                <button
+                  className="call-primary-action decline-call"
+                  disabled={!canDecline || busy !== ''}
+                  onClick={() => run('decline', () => controller.decline())}
+                >
+                  <span className="call-action-icon"><ControlIcon name="phone" /></span>
+                  <span>{busy === 'decline' ? 'Declining…' : 'Decline'}</span>
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="mobile-call-controls">
+              <button
+                className={`phone-control ${snapshot.muted ? 'active' : ''}`}
+                disabled={busy !== '' || !snapshot.muteCapable}
+                onClick={() => run('mute', () => controller.toggleMute())}
+              >
+                <span><ControlIcon name="mute" /></span>
+                <small>{snapshot.muted ? 'Unmute' : 'Mute'}</small>
+              </button>
+              <button
+                className={`phone-control ${snapshot.held ? 'active' : ''}`}
+                disabled={busy !== '' || !snapshot.holdCapable}
+                onClick={() => run('hold', () => controller.toggleHold())}
+              >
+                <span><ControlIcon name="hold" /></span>
+                <small>{snapshot.held ? 'Resume' : 'Hold'}</small>
+              </button>
+              <button
+                className={`phone-control ${dialpadOpen ? 'active' : ''}`}
+                disabled={busy !== '' || !snapshot.dtmfCapable}
+                aria-expanded={dialpadOpen}
+                aria-controls="dtmf-dialpad"
+                onClick={() => {
+                  setRouteMode('');
+                  setDialpadTaskId(dialpadOpen ? '' : snapshot.interactionId);
+                }}
+              >
+                <span><ControlIcon name="keypad" /></span>
+                <small>Keypad</small>
+              </button>
+              <button
+                className={`phone-control ${snapshot.recordingPaused ? 'active warning-active' : ''}`}
+                disabled={busy !== '' || !snapshot.recordingPauseCapable}
+                title={snapshot.recordingPauseCapable ? '' : 'Recording pause is not enabled for this interaction'}
+                onClick={() => run('recording', () => controller.toggleRecording())}
+              >
+                <span><ControlIcon name="record" /></span>
+                <small>{snapshot.recordingPaused ? 'Resume rec.' : 'Pause rec.'}</small>
+              </button>
+              <button
+                className={`phone-control ${activeRouteMode === 'consult' || snapshot.consultActive || snapshot.conferenceActive ? 'active' : ''}`}
+                disabled={busy !== '' || snapshot.consultActive || (!snapshot.conferenceActive && !snapshot.consultCapable)}
+                onClick={() => {
+                  setDialpadTaskId('');
+                  if (snapshot.conferenceActive) setParticipantsOpen((open) => !open);
+                  else void openRoutePanel('consult');
+                }}
+              >
+                <span><ControlIcon name={snapshot.conferenceActive ? 'participants' : 'consult'} /></span>
+                <small>{snapshot.conferenceActive ? 'Participants' : 'Consult'}</small>
+              </button>
+              <button
+                className={`phone-control ${activeRouteMode === 'transfer' ? 'active' : ''}`}
+                disabled={busy !== '' || snapshot.consultActive || snapshot.conferenceActive || !snapshot.transferCapable}
+                onClick={() => {
+                  setDialpadTaskId('');
+                  void openRoutePanel('transfer');
+                }}
+              >
+                <span><ControlIcon name="transfer" /></span>
+                <small>Transfer</small>
+              </button>
+                </div>
+                <button
+                  className="end-call-button"
+                  disabled={busy !== '' || !snapshot.endCapable}
+                  onClick={() => run('end', () => controller.endCall())}
+                >
+                  <span><ControlIcon name="phone" /></span>
+                  End call
+                </button>
+              </>
+            )}
+          </section>
         )}
       </div>
 

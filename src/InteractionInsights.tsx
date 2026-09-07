@@ -2,7 +2,7 @@ import {useState} from 'react';
 import type {WebexPocController} from './WebexPocController';
 import type {ControllerSnapshot} from './types';
 
-type InsightTab = 'context' | 'transcript' | 'assist' | 'summary';
+type InsightTab = 'context' | 'transcript' | 'assist' | 'summary' | 'stats';
 
 interface InteractionInsightsProps {
   snapshot: ControllerSnapshot;
@@ -16,6 +16,15 @@ function labelForRole(role: string): string {
   if (normalized.includes('agent')) return 'Agent';
   if (normalized.includes('customer') || normalized.includes('caller')) return 'Customer';
   return role || 'Speaker';
+}
+
+function formatMetricDuration(seconds: number): string {
+  const rounded = Math.max(0, Math.round(seconds));
+  if (rounded < 60) return `${rounded}s`;
+  const minutes = Math.floor(rounded / 60);
+  const remainder = rounded % 60;
+  if (minutes < 60) return `${minutes}m ${String(remainder).padStart(2, '0')}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 function ContextView({snapshot}: {snapshot: ControllerSnapshot}) {
@@ -181,18 +190,76 @@ function SummaryView({snapshot, controller, busy, run}: InteractionInsightsProps
   );
 }
 
+function StatisticsView({snapshot, controller, busy}: InteractionInsightsProps) {
+  return (
+    <div className="insight-content statistics-view">
+      <div className="performance-heading">
+        <div>
+          <p className="section-kicker">My performance</p>
+          <h3>Today</h3>
+        </div>
+        <button
+          type="button"
+          className="performance-refresh"
+          disabled={busy !== '' || snapshot.performanceStatus === 'loading'}
+          onClick={() => void controller.loadPerformance()}
+        >
+          {snapshot.performanceStatus === 'loading' ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+      {snapshot.performanceStatus === 'loading' ? (
+        <div className="performance-grid" aria-label="Loading performance statistics">
+          {[0, 1, 2, 3].map((item) => <span key={item} className="metric-skeleton" />)}
+        </div>
+      ) : snapshot.performanceStatus === 'ready' && snapshot.performance ? (
+        <div className="performance-grid">
+          <article className="performance-card">
+            <span>Completed</span>
+            <strong>{snapshot.performance.handled}</strong>
+            <small>interactions</small>
+          </article>
+          <article className="performance-card">
+            <span>Avg talk</span>
+            <strong>{formatMetricDuration(snapshot.performance.averageConnectedSeconds)}</strong>
+            <small>connected time</small>
+          </article>
+          <article className="performance-card">
+            <span>Avg hold</span>
+            <strong>{formatMetricDuration(snapshot.performance.averageHoldSeconds)}</strong>
+            <small>per interaction</small>
+          </article>
+          <article className="performance-card">
+            <span>Avg wrap-up</span>
+            <strong>{formatMetricDuration(snapshot.performance.averageWrapupSeconds)}</strong>
+            <small>per interaction</small>
+          </article>
+        </div>
+      ) : (
+        <div className="performance-unavailable">
+          <strong>Reporting unavailable</strong>
+          <span>{snapshot.performanceMessage || 'Performance statistics are unavailable for this session.'}</span>
+        </div>
+      )}
+      <p className="performance-caption">
+        Completed telephony interactions where you were the last handling agent. Times use your local day.
+      </p>
+    </div>
+  );
+}
+
 export function InteractionInsights(props: InteractionInsightsProps) {
-  const [tab, setTab] = useState<InsightTab>('context');
+  const [tab, setTab] = useState<InsightTab>('transcript');
   const {snapshot} = props;
   const tabs: Array<{id: InsightTab; label: string; count?: number}> = [
-    {id: 'context', label: 'Context'},
     {id: 'transcript', label: 'Transcript', count: snapshot.transcripts.length},
     {id: 'assist', label: 'Assist', count: snapshot.aiSuggestions.length},
     {id: 'summary', label: 'Summary'},
+    {id: 'stats', label: 'Statistics'},
+    {id: 'context', label: 'Call details'},
   ];
 
   return (
-    <aside className="insights-panel" aria-label="Interaction insights">
+    <section className="insights-panel" aria-label="Conversation workspace">
       <div className="insight-tabs" role="tablist" aria-label="Interaction information">
         {tabs.map((item) => (
           <button
@@ -211,6 +278,7 @@ export function InteractionInsights(props: InteractionInsightsProps) {
       {tab === 'transcript' && <TranscriptView {...props} />}
       {tab === 'assist' && <AssistanceView {...props} />}
       {tab === 'summary' && <SummaryView {...props} />}
-    </aside>
+      {tab === 'stats' && <StatisticsView {...props} />}
+    </section>
   );
 }

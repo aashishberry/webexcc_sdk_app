@@ -32,7 +32,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, st
 | Endpoint preference | Optional persistence of the selected Webex Calling answer endpoint |
 | Refresh recovery | SDK automated relogin, station-state restoration, and task hydration |
 | Alerts | Web Audio ringtone and background operating-system notification with supported actions |
-| User interface | One responsive desktop/mobile lifecycle workspace with a persistent state timer, stable call-control dock, interaction context and AI panel, system/light/dark themes, accessible selectors, banners, and a diagnostics drawer |
+| User interface | One responsive desktop/mobile lifecycle workspace with a persistent state timer, full conversation workspace, bottom call-control dock, interaction context, AI and statistics tabs, system/light/dark themes, accessible selectors, banners, and a diagnostics drawer |
 | Logging | Structured backend lifecycle and action logs with allowlisted, non-PII browser diagnostics |
 
 ## Technology
@@ -168,12 +168,15 @@ Conference rows are reconstructed only while the SDK participant map is unavaila
 
 ## Interaction insights and AI
 
-The active interaction opens a companion panel with four views:
+The active interaction uses a compact caller rail beside a large conversation workspace. Transcript opens by default; incoming and connected-call actions occupy a bottom dock spanning the workspace. At tablet and mobile widths the caller rail and conversation workspace stack, while the same control dock becomes sticky and uses a three-column grid.
 
-- Context: caller identity plus queue, reason, IVR path, entry point, and language when supplied by task data.
+The conversation workspace exposes five views:
+
 - Transcript: historic transcript recovery after hydration and live transcript events during the conversation.
 - Assist: `getRealTimeAssistance()` requests, suggested responses, copy action, and helpful/not-helpful feedback.
 - Summary: mid-call and post-call requests through the AI Assistant event API.
+- Statistics: the current-day performance snapshot and its manual refresh action.
+- Call details: caller identity plus queue, reason, IVR path, entry point, and language when supplied by task data.
 
 The UI renders empty states when the tenant, agent profile, or interaction does not enable an AI or reporting capability. It does not invent transcript, summary, queue, or performance values.
 

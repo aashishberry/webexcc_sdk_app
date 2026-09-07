@@ -50,7 +50,7 @@ The Contact Center SDK connects directly from the browser to Webex services, rou
 | Component | Responsibilities |
 |---|---|
 | `App.tsx` | Workflow composition, profile-driven station-mode selection, WebRTC permission and remote-audio binding, responsive lifecycle stage, persistent state control, call-control dock, consult/conference views, banners, theme, alerts, and diagnostics drawer |
-| `InteractionInsights.tsx` | Interaction context, transcript lifecycle status and retry, historic/live transcript presentation, real-time AI assistance and feedback, and mid-call/post-call summary presentation |
+| `InteractionInsights.tsx` | Primary conversation workspace with transcript lifecycle status and retry, historic/live transcript presentation, real-time AI assistance and feedback, mid-call/post-call summaries, active-session performance statistics, and interaction context |
 | `WebexPocController.ts` | Contact Center lifecycle, three-mode station login, native task controls, browser media events, interaction context and participant normalization, transcript START/STOP coordination, AI Assistant events, optional performance loading, task state machine, and action coordination |
 | `server.mjs` | OAuth, token refresh, HTTP-only session cookie, Calling configuration proxy, GraphQL Search proxy, diagnostics ingestion, static hosting |
 | `callingApi.ts` | Typed same-origin client for server routes |
@@ -414,7 +414,7 @@ Station setup deliberately has two progressive views rather than a persistent st
 
 The top bar contains a persistent agent-state selector and time-in-state display. It remains available for connected and held interactions, including consult and conference modes, and is disabled while ringing, answering, wrapping up, or executing another action. Selecting a value invokes the normal Contact Center agent-state API; Webex Contact Center remains authoritative for the resulting agent-state event. During wrap-up, the interaction header retains the frozen call duration and displays a separate after-call-work timer.
 
-The active interaction uses a two-column desktop layout: the call lifecycle and stable control dock are the primary stage, while Context, Transcript, Assist, and Summary occupy a companion panel. At tablet and mobile breakpoints the same components stack vertically. There is no separate mobile application, SDK instance, or navigation rail.
+The active interaction uses a two-column desktop layout: a compact caller/lifecycle rail and a large conversation workspace where Transcript opens by default beside Assist, Summary, Statistics, and Call details tabs. Incoming and connected-call actions use a dedicated bottom dock spanning both columns. At tablet and mobile breakpoints the same components stack vertically and the control dock becomes sticky with a three-column control grid. There is no separate mobile application, SDK instance, or navigation rail.
 
 The idle workspace renders the optional `AgentPerformanceSummary` as a four-card responsive grid. Loading uses a compact skeleton, manual refresh does not block agent-state or station controls, and unavailable reporting remains an inline secondary state. The same component collapses from four to two columns on mobile.
 
