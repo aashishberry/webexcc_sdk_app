@@ -164,11 +164,7 @@ input:focus { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf20; }
 .caller-copy strong { font-size: 16px; }
 .caller-copy span { color: light-dark(#6d7c87, #9cabb6); font-size: 12px; }
 .call-state { color: light-dark(#60717d, #a8b6c1); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
-.association { margin: 12px 0; border-radius: 8px; padding: 9px 11px; color: light-dark(#315c78, #a5d8fa); background: light-dark(#eaf4fd, #173248); font-size: 12px; }
-.call-card .association { flex: 0 0 auto; margin: 0; border-radius: 999px; padding: 6px 9px; font-size: 10px; font-weight: 720; }
-.association-wxcc { color: light-dark(#18743b, #8be0ac); background: light-dark(#e4f7eb, #173c29); }
 .call-badges { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.call-card .call-badges .association { margin: 0; }
 .recording-badge { display: inline-flex; align-items: center; gap: 6px; border: 1px solid light-dark(#efb5bb, #773944); border-radius: 999px; padding: 5px 8px; color: light-dark(#a32333, #ffabb4); background: light-dark(#fff0f2, #3a1820); font-size: 10px; font-weight: 760; white-space: nowrap; }
 .recording-badge i { width: 7px; height: 7px; border-radius: 50%; background: #d73545; box-shadow: 0 0 0 3px #d7354522; animation: recording-pulse 1.8s ease-in-out infinite; }
 .recording-badge.is-paused { border-color: light-dark(#dfca92, #735b26); color: light-dark(#80601b, #e6c66f); background: light-dark(#fff7df, #332814); }
@@ -291,7 +287,6 @@ input:focus { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf20; }
   .panel-heading.workspace-heading { display: grid; grid-template-columns: 1fr; }
   .interaction-heading { padding: 12px; }
   .call-card { align-items: flex-start; flex-wrap: wrap; padding: 14px; }
-  .call-card .association { margin-left: 59px; }
   .mobile-call-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .consult-action-row { grid-template-columns: 1fr; }
   .conference-actions { grid-template-columns: 1fr; }
@@ -306,7 +301,6 @@ input:focus { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf20; }
   .connection-summary { align-items: flex-start; padding: 15px; }
   .connection-illustration { width: 46px; height: 46px; border-radius: 13px; }
   .station-details-card { padding: 13px; }
-  .call-card .association { width: fit-content; max-width: calc(100% - 59px); }
   .mobile-call-controls { gap: 15px 4px; }
   .phone-control > span { width: 49px; height: 49px; }
   .conference-people { gap: 5px; }
@@ -379,6 +373,8 @@ button, input, textarea { font: inherit; }
 .state-pill.is-idle .state-dot { background: #d99b22; box-shadow: 0 0 0 3px #d99b2222; }
 .state-pill.is-reserved { border-color: light-dark(#9fcfe6, #1d617f); background: light-dark(#e3f3fa, #102e3c); }
 .state-pill.is-reserved .state-dot { background: #238fbd; box-shadow: 0 0 0 3px #238fbd22; }
+.state-pill.is-rona { border-color: light-dark(#e5a2aa, #763b44); background: light-dark(#fff1f2, #351a20); }
+.state-pill.is-rona .state-dot { background: #c53a47; box-shadow: 0 0 0 3px #c53a4722; }
 .state-pill.is-engaged { border-color: light-dark(#a9c9e9, #285e91); background: light-dark(#e8f1fb, #122b43); }
 .state-pill.is-engaged .state-dot { background: #1170cf; box-shadow: 0 0 0 3px #1170cf22; }
 .state-pill.is-wrapup { border-color: light-dark(#c8c2ef, #554e9e); background: light-dark(#efedff, #242043); }
@@ -387,6 +383,7 @@ button, input, textarea { font: inherit; }
 .state-pill-select .select-menu-trigger { min-height: 28px; padding: 4px 3px; border: 0; box-shadow: none !important; color: light-dark(#176f49, #66dda6); background: transparent !important; font-size: 11px; font-weight: 800; }
 .is-idle .state-pill-select .select-menu-trigger { color: light-dark(#855d10, #ecc35c); }
 .is-reserved .state-pill-select .select-menu-trigger { color: light-dark(#12638a, #7bcbed); }
+.is-rona .state-pill-select .select-menu-trigger { color: light-dark(#8d2f3a, #ffabb4); }
 .is-engaged .state-pill-select .select-menu-trigger { color: light-dark(#175d9d, #82bdf4); }
 .is-wrapup .state-pill-select .select-menu-trigger { color: light-dark(#5e55b4, #b8b1ff); }
 .state-pill-select .select-chevron { margin-right: 5px; }
@@ -396,6 +393,8 @@ button, input, textarea { font: inherit; }
 .call-card { position: relative; overflow: hidden; min-height: 88px; padding: 17px 19px; }
 .call-card::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; background: #28b777; }
 .call-ringing::before, .call-answering::before { background: #22a9d6; }
+.call-rona::before { background: #c53a47; }
+.rona-notice { color: light-dark(#7f2b35, #ffb3bb); background: light-dark(#fff1f2, #351a20); }
 .call-held::before { background: #d99b22; }
 .call-wrap-up::before { background: #8178ed; }
 .call-card .avatar { width: 50px; height: 50px; }
@@ -519,12 +518,22 @@ button, input, textarea { font: inherit; }
   flex: 0 1 300px;
   grid-template-columns: repeat(2, minmax(110px, 1fr));
 }
-.answer-call-control { color: light-dark(#12693f, #86ddb1); }
-.answer-call-control > span { color: white; border-color: #168354; background: #168354; box-shadow: 0 8px 20px #16835438; }
-.answer-call-control:hover:not(:disabled) > span { border-color: #0d6f44; background: #0d6f44; }
-.decline-call-control { color: light-dark(#8d2f3a, #ffabb4); }
-.decline-call-control > span { color: white; border-color: #c53a47; background: #c53a47; box-shadow: 0 8px 20px #c53a4738; }
-.decline-call-control:hover:not(:disabled) > span { border-color: #a92b37; background: #a92b37; }
+.answer-call-control {
+  color: light-dark(#12693f, #86ddb1);
+  border-color: light-dark(#8bcfaf, #286a4b);
+  background: light-dark(#edf9f3, #123024);
+}
+.answer-call-control > span { color: #168354; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.answer-call-control:hover:not(:disabled) { border-color: #168354; background: light-dark(#dcf3e8, #193e2f); }
+.answer-call-control:hover:not(:disabled) > span { border: 0; background: transparent; }
+.decline-call-control {
+  color: light-dark(#8d2f3a, #ffabb4);
+  border-color: light-dark(#e5a2aa, #763b44);
+  background: light-dark(#fff1f2, #351a20);
+}
+.decline-call-control > span { color: #c53a47; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.decline-call-control:hover:not(:disabled) { border-color: #c53a47; background: light-dark(#ffe2e5, #442027); }
+.decline-call-control:hover:not(:disabled) > span { border: 0; background: transparent; }
 .decline-call-control .control-icon { transform: rotate(135deg); }
 .call-control-dock .end-call-button { flex: 0 0 84px; margin: 0; }
 .call-control-dock .end-call-button > span { width: 48px; height: 48px; }
@@ -582,7 +591,6 @@ button, input, textarea { font: inherit; }
   .interaction-timer time { font-size: 19px; }
   .interaction-timers { width: 100%; justify-content: space-between; gap: 10px; }
   .interaction-timers .call-duration-timer { justify-items: start; padding-right: 10px; }
-  .call-card .association { margin-left: 0; }
   .call-control-dock { align-items: stretch; gap: 8px; padding: 8px; }
   .call-control-dock .mobile-call-controls { grid-template-columns: repeat(3, minmax(64px, 1fr)); }
   .call-control-dock .incoming-call-controls { grid-template-columns: repeat(2, minmax(96px, 1fr)); }

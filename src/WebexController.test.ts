@@ -234,6 +234,60 @@ describe('WebexController station login', () => {
 });
 
 describe('WebexController task completion', () => {
+  it('ends the ringing presentation and enters RONA when an offer is rejected by routing', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.update({
+      activeTask: task,
+      callStatus: 'ringing',
+      callStartedAt: Date.now() - 15_000,
+      acceptCapable: true,
+      declineCapable: true,
+    });
+    observeTask(controller, task);
+
+    task.emitTest('task:rejected', 'NO_ANSWER');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'rona',
+      agentState: 'RONA',
+      lifecycle: 'idle',
+      callEndedAt: expect.any(Number),
+      acceptCapable: false,
+      declineCapable: false,
+    });
+  });
+
+  it('ends only the consultation when its destination does not answer', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.update({
+      activeTask: task,
+      callStatus: 'connected',
+      consultActive: true,
+      consultDestinationName: 'Agent Two',
+    });
+    observeTask(controller, task);
+
+    task.emitTest('task:rejected', 'NO_ANSWER');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'connected',
+      consultActive: false,
+      consultDestinationName: '',
+    });
+  });
+
   it('enables wrap-up when task:end reports wrapUpRequired', () => {
     const controller = new WebexController();
     const task = fakeTask(true);
@@ -278,6 +332,59 @@ describe('WebexController task completion', () => {
     });
     expect(controller.getSnapshot().callEndedAt).toBeGreaterThan(0);
     expect(controller.getSnapshot().wrapupStartedAt).toBeGreaterThan(0);
+  });
+});
+
+describe('WebexController interaction timing', () => {
+  it('freezes queue wait at offer time and starts call duration when the agent joins', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const queuedAt = 1_788_790_000_000;
+    const offeredAt = queuedAt + 35_000;
+    const connectedAt = offeredAt + 8_000;
+    const listeners = new Map<string, (payload: ITask) => void>();
+    const internal = controller as unknown as {
+      cc: {on: (event: string, listener: (payload: ITask) => void) => void};
+      profile: Profile;
+      attachContactCenterListeners: () => void;
+    };
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    internal.cc = {
+      on: (event, listener) => listeners.set(event, listener),
+    };
+    Object.assign((task as any).data, {
+      agentId: 'agent-1',
+      eventTime: offeredAt,
+      interaction: {
+        queuedTimestamp: queuedAt,
+        participants: {
+          'agent-1': {id: 'agent-1', hasJoined: false},
+        },
+      },
+    });
+    internal.attachContactCenterListeners();
+
+    listeners.get('task:incoming')?.(task);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'ringing',
+      callStartedAt: offeredAt,
+      queueDurationMs: 35_000,
+    });
+
+    (task.data as any).eventTime = connectedAt;
+    (task.data as any).interaction.participants['agent-1'] = {
+      id: 'agent-1',
+      hasJoined: true,
+      joinTimestamp: connectedAt,
+    };
+    task.emitTest('task:assigned');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'connected',
+      callStartedAt: connectedAt,
+      queueDurationMs: 35_000,
+    });
   });
 });
 

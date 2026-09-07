@@ -105,7 +105,8 @@ function interactionContext(task: ITask): InteractionContext {
       details.languageCode,
       callAssociatedValue(associated, 'language', 'languageCode', 'Language'),
     ),
-    offeredAt: Number(interaction.createdTimestamp || data.createdTimestamp) || undefined,
+    queuedAt:
+      epochMilliseconds(interaction.queuedTimestamp ?? data.queuedTimestamp) || undefined,
   };
 }
 
@@ -274,6 +275,26 @@ function taskWrapupStartedAt(task: ITask, agentId = ''): number {
     participant.agentId === agentId,
   )?.[1];
   return epochMilliseconds(currentAgent?.wrapUpTimestamp);
+}
+
+function taskConnectedAt(task: ITask, agentId = ''): number {
+  const data = task.data as unknown as Record<string, any>;
+  const participantAgentId = agentId || String(data.agentId ?? '');
+  const participants = Object.entries(data.interaction?.participants ?? {}) as Array<
+    [string, Record<string, any>]
+  >;
+  const currentAgent = participants.find(([id, participant]) =>
+    id === participantAgentId ||
+    participant.id === participantAgentId ||
+    participant.participantId === participantAgentId ||
+    participant.agentId === participantAgentId,
+  )?.[1];
+  return epochMilliseconds(currentAgent?.joinTimestamp);
+}
+
+function taskEventAt(task: ITask): number {
+  const data = task.data as unknown as Record<string, any>;
+  return epochMilliseconds(data.eventTime);
 }
 
 function taskControlState(task: ITask) {
@@ -659,6 +680,7 @@ export class WebexController {
         lastStateChangeReason: 'Agent selected Available',
       });
       this.setLifecycle('available', 'Available');
+      if (this.snapshot.callStatus === 'rona') this.clearCallState();
       this.log('Agent is Available.', 'success');
       reportBackendEvent('cc.agent_state', 'succeeded', {state: 'available'});
     } catch (error) {
@@ -682,6 +704,7 @@ export class WebexController {
         lastStateChangeReason: `Agent selected ${idleCode.name}`,
       });
       this.setLifecycle('idle', idleCode.name);
+      if (this.snapshot.callStatus === 'rona') this.clearCallState();
       this.log(`Agent state changed to ${idleCode.name}.`, 'success');
       reportBackendEvent('cc.agent_state', 'succeeded', {state: 'idle'});
     } catch (error) {
@@ -1233,16 +1256,21 @@ export class WebexController {
       this.task = task;
       this.attachTaskListeners(task);
       const interactionId = task.data.interactionId;
+      const context = interactionContext(task);
+      const offeredAt = taskEventAt(task) || Date.now();
       this.update({
         activeTask: task,
         interactionId,
-        callStartedAt: interactionContext(task).offeredAt || Date.now(),
+        callStartedAt: offeredAt,
         callEndedAt: 0,
+        queueDurationMs: context.queuedAt
+          ? Math.max(0, offeredAt - context.queuedAt)
+          : 0,
         wrapupStartedAt: 0,
         callStatus: 'ringing',
         callerName: incomingName(task),
         callerNumber: incomingNumber(task),
-        interactionContext: interactionContext(task),
+        interactionContext: context,
         participants: interactionParticipants(task, this.profile?.agentId),
         ...taskControlState(task),
         muted: task.getWxAppMuted?.() ?? false,
@@ -1298,17 +1326,22 @@ export class WebexController {
             ? 'held'
             : 'connected';
     const wrapupStartedAt = wrapup ? taskWrapupStartedAt(task, this.profile?.agentId) || Date.now() : 0;
+    const context = interactionContext(task);
+    const connectedAt = taskConnectedAt(task, this.profile?.agentId);
 
     this.update({
       activeTask: task,
       interactionId: task.data.interactionId,
-      callStartedAt: interactionContext(task).offeredAt || Date.now(),
+      callStartedAt: connectedAt || taskEventAt(task) || Date.now(),
       callEndedAt: terminated ? wrapupStartedAt || Date.now() : 0,
+      queueDurationMs: context.queuedAt && connectedAt
+        ? Math.max(0, connectedAt - context.queuedAt)
+        : 0,
       wrapupStartedAt,
       callStatus,
       callerName: incomingName(task),
       callerNumber: incomingNumber(task),
-      interactionContext: interactionContext(task),
+      interactionContext: context,
       participants: interactionParticipants(task, this.profile?.agentId),
       ...taskControlState(task),
       muted: task.getWxAppMuted?.() ?? false,
@@ -1342,7 +1375,7 @@ export class WebexController {
     this.observedTasks.add(task);
 
     task.on('task:ui-controls-updated', () => {
-      if (this.task === task) {
+      if (this.task === task && this.snapshot.callStatus !== 'rona') {
         this.update({
           ...taskControlState(task),
           recordingActive: recordingActive(task),
@@ -1366,14 +1399,60 @@ export class WebexController {
 
     task.on('task:assigned', () => {
       if (this.task !== task) return;
+      const connectedAt = taskConnectedAt(task, this.profile?.agentId) || taskEventAt(task) || Date.now();
       this.update({
         callStatus: 'connected',
+        callStartedAt: connectedAt,
+        callEndedAt: 0,
         ...taskControlState(task),
         recordingActive: recordingActive(task),
         recordingPaused: recordingPaused(task),
       });
       this.log('WxCC task assigned and connected.', 'success');
       void this.startTranscription().catch(() => undefined);
+    });
+    task.on('task:rejected', (reason?: unknown) => {
+      if (this.task !== task) return;
+      if (!['ringing', 'answering'].includes(this.snapshot.callStatus)) {
+        if (this.snapshot.consultActive) {
+          this.update({
+            consultActive: false,
+            consultDestinationName: '',
+            ...taskControlState(task),
+          });
+          this.log('Consult destination did not answer.', 'warning');
+        }
+        return;
+      }
+
+      const rejectedAt = Date.now();
+      this.update({
+        callStatus: 'rona',
+        callEndedAt: rejectedAt,
+        agentState: 'RONA',
+        lifecycle: 'idle',
+        stateChangedAt: rejectedAt,
+        acceptCapable: false,
+        declineCapable: false,
+        holdCapable: false,
+        endCapable: false,
+        muteCapable: false,
+        dtmfCapable: false,
+        recordingPauseCapable: false,
+        consultCapable: false,
+        transferCapable: false,
+        switchCapable: false,
+        conferenceCapable: false,
+        consultTransferCapable: false,
+        endConsultCapable: false,
+        exitConferenceCapable: false,
+        transferConferenceCapable: false,
+      });
+      this.log(
+        `Contact Center offer redirected after no answer${typeof reason === 'string' && reason ? ` (${reason})` : ''}.`,
+        'warning',
+      );
+      reportBackendEvent('cc.task', 'observed', {state: 'rona'});
     });
     task.on('task:hold', () =>
       this.update({held: true, callStatus: 'held', ...taskControlState(task)}),
@@ -1612,6 +1691,7 @@ export class WebexController {
       interactionId: '',
       callStartedAt: 0,
       callEndedAt: 0,
+      queueDurationMs: 0,
       wrapupStartedAt: 0,
       callerName: '',
       callerNumber: '',

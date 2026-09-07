@@ -14,6 +14,7 @@ export type CallStatus =
   | 'none'
   | 'ringing'
   | 'answering'
+  | 'rona'
   | 'connected'
   | 'held'
   | 'wrap-up'
@@ -48,7 +49,7 @@ export interface InteractionContext {
   ivrPath: string;
   entryPoint: string;
   language: string;
-  offeredAt?: number;
+  queuedAt?: number;
 }
 
 export interface InteractionParticipant {
@@ -121,6 +122,7 @@ export interface ControllerSnapshot {
   interactionId: string;
   callStartedAt: number;
   callEndedAt: number;
+  queueDurationMs: number;
   wrapupStartedAt: number;
   callerName: string;
   callerNumber: string;
@@ -211,6 +213,7 @@ export const initialSnapshot: ControllerSnapshot = {
   interactionId: '',
   callStartedAt: 0,
   callEndedAt: 0,
+  queueDurationMs: 0,
   wrapupStartedAt: 0,
   callerName: '',
   callerNumber: '',

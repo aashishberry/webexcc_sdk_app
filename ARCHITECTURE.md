@@ -399,14 +399,15 @@ conferenceActive
 
 `task:consultCreated`, `task:consulting`, and `task:consultEnd` update consultation state. `task:conferenceStarted` and `task:conferenceEnded` update conference state. During refresh hydration, `isConsulted`, `isConferencing`, and `isConferenceInProgress` restore these modes.
 
-Call and wrap-up timing use separate controller fields:
+Queue, connected-call, and wrap-up timing use separate controller fields:
 
 ```text
-callStartedAt -> callEndedAt       frozen call duration
+queuedTimestamp -> agent offer     frozen queue wait shown as a context pill
+callStartedAt -> callEndedAt       connected agent call duration
 wrapupStartedAt -> current clock   elapsed wrap-up time
 ```
 
-The wrap-up event uses the current agent participant's `wrapUpTimestamp` when available and falls back to the local observation time. Hydrated wrap-up tasks use the same timestamp extraction, preventing the call clock from continuing during after-call work.
+`task:assigned` resets `callStartedAt` to the current agent participant's `joinTimestamp`, so IVR, queue, and ringing time are excluded from talk duration. The wrap-up event uses the current agent participant's `wrapUpTimestamp` when available and falls back to the local observation time. Hydrated tasks restore the same participant timestamps, preventing the call clock from including pre-agent handling time or continuing during after-call work.
 
 ## 11. Responsive UI state
 

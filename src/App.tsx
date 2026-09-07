@@ -235,7 +235,7 @@ export function App() {
   const stationLoggedIn = ['station-logged-in', 'available', 'idle'].includes(snapshot.lifecycle);
   const activeInteraction =
     Boolean(snapshot.activeTask) ||
-    ['ringing', 'answering', 'connected', 'held', 'wrap-up'].includes(snapshot.callStatus);
+    ['ringing', 'answering', 'rona', 'connected', 'held', 'wrap-up'].includes(snapshot.callStatus);
   const hasCall = snapshot.callStatus !== 'none';
   const wrapupActive = snapshot.callStatus === 'wrap-up';
   const stateChangeDisabled =
@@ -247,6 +247,8 @@ export function App() {
     queuedIdleState ? `${label} · ${queuedIdleState} next` : label;
   const interactionPresence = ['ringing', 'answering'].includes(snapshot.callStatus)
     ? {value: 'interaction:reserved', label: withQueuedState('Reserved'), className: 'is-reserved'}
+    : snapshot.callStatus === 'rona'
+      ? {value: 'interaction:rona', label: 'RONA', className: 'is-rona'}
     : snapshot.callStatus === 'wrap-up'
       ? {value: 'interaction:wrap-up', label: withQueuedState('Pending wrap-up'), className: 'is-wrapup'}
       : ['connected', 'held'].includes(snapshot.callStatus)
@@ -378,6 +380,8 @@ export function App() {
   const stateValue = interactionPresence?.value ?? routingStateValue;
   const displayedStateStartedAt = snapshot.callStatus === 'wrap-up'
     ? snapshot.wrapupStartedAt
+    : snapshot.callStatus === 'rona'
+      ? snapshot.stateChangedAt
     : interactionPresence
       ? snapshot.callStartedAt
       : snapshot.stateChangedAt;
@@ -867,6 +871,8 @@ export function App() {
                   <h2>
                     {wrapupActive
                       ? 'Wrap up interaction'
+                      : snapshot.callStatus === 'rona'
+                        ? 'Missed interaction'
                       : snapshot.conferenceActive
                         ? 'Conference call'
                         : snapshot.consultActive
@@ -887,6 +893,11 @@ export function App() {
                         <time>{wrapupElapsed}</time>
                         <span>Wrap-up</span>
                       </div>
+                    </div>
+                  ) : snapshot.callStatus === 'rona' ? (
+                    <div className="interaction-timer">
+                      <time>{callElapsed}</time>
+                      <span>Offer duration</span>
                     </div>
                   ) : (
                     <div className="interaction-timer">
@@ -982,15 +993,14 @@ export function App() {
                       <strong>{snapshot.callerName || 'Contact Center caller'}</strong>
                       <span>{snapshot.callerNumber || 'Number unavailable'}</span>
                     </div>
-                    <div className="call-badges">
-                      {snapshot.recordingActive && (
+                    {snapshot.recordingActive && (
+                      <div className="call-badges">
                         <span className={`recording-badge ${snapshot.recordingPaused ? 'is-paused' : ''}`}>
                           <i aria-hidden="true" />
                           {snapshot.recordingPaused ? 'Recording paused' : 'Recording'}
                         </span>
-                      )}
-                      <span className="association association-wxcc">SDK controlled</span>
-                    </div>
+                      </div>
+                    )}
                   </div>
 
                   {[
@@ -999,15 +1009,16 @@ export function App() {
                     snapshot.interactionContext.language,
                     snapshot.interactionContext.ivrPath,
                     snapshot.interactionContext.entryPoint,
-                  ].some(Boolean) && (
+                  ].some(Boolean) || snapshot.queueDurationMs > 0 ? (
                     <div className="context-chips" aria-label="Interaction context">
                       {snapshot.interactionContext.queueName && <span>Queue · {snapshot.interactionContext.queueName}</span>}
+                      {snapshot.queueDurationMs > 0 && <span>Queued · {formatElapsed(snapshot.queueDurationMs)}</span>}
                       {snapshot.interactionContext.reason && <span>Reason · {snapshot.interactionContext.reason}</span>}
                       {snapshot.interactionContext.language && <span>Language · {snapshot.interactionContext.language}</span>}
                       {snapshot.interactionContext.ivrPath && <span>IVR · {snapshot.interactionContext.ivrPath}</span>}
                       {snapshot.interactionContext.entryPoint && <span>Entry · {snapshot.interactionContext.entryPoint}</span>}
                     </div>
-                  )}
+                  ) : null}
 
                   <details className="call-metadata">
                     <summary>Interaction details</summary>
@@ -1016,7 +1027,11 @@ export function App() {
                     </div>
                   </details>
 
-                  {wrapupActive ? null : snapshot.callStatus === 'ended' ? (
+                  {wrapupActive ? null : snapshot.callStatus === 'rona' ? (
+                    <div className="notice rona-notice">
+                      The call was redirected after it was not answered. Select your next agent state when ready.
+                    </div>
+                  ) : snapshot.callStatus === 'ended' ? (
                     <div className="notice pending-notice">
                       Calling media has ended. Waiting for Contact Center to confirm whether wrap-up is required.
                     </div>
