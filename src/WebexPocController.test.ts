@@ -4,35 +4,60 @@ import {WebexPocController} from './WebexPocController';
 
 vi.mock('@webex/contact-center', () => ({default: {}}));
 
-type TaskListener = (task?: ITask) => void;
+type TaskListener = (...args: any[]) => void;
 
-function fakeTask(wrapUpRequired: boolean): ITask & {emitTest: (event: string) => void} {
+type FakeTask = ITask & {
+  emitTest: (event: string, payload?: unknown) => void;
+  accept: ReturnType<typeof vi.fn>;
+  decline: ReturnType<typeof vi.fn>;
+  hold: ReturnType<typeof vi.fn>;
+  resume: ReturnType<typeof vi.fn>;
+  end: ReturnType<typeof vi.fn>;
+  toggleMute: ReturnType<typeof vi.fn>;
+  transmitDtmf: ReturnType<typeof vi.fn>;
+};
+
+function fakeTask(wrapUpRequired: boolean): FakeTask {
   const listeners = new Map<string, TaskListener[]>();
+  let muted = false;
   const task = {
     data: {interactionId: 'interaction-1', wrapUpRequired},
+    uiControls: {
+      main: {
+        accept: {isVisible: true, isEnabled: true},
+        decline: {isVisible: true, isEnabled: true},
+        hold: {isVisible: true, isEnabled: true},
+        end: {isVisible: true, isEnabled: true},
+        mute: {isVisible: true, isEnabled: true},
+        keypad: {isVisible: true, isEnabled: true},
+      },
+    },
+    accept: vi.fn(async () => undefined),
+    decline: vi.fn(async () => undefined),
+    hold: vi.fn(async () => undefined),
+    resume: vi.fn(async () => undefined),
+    end: vi.fn(async () => undefined),
+    toggleMute: vi.fn(async ({muted: target}: {muted: boolean}) => {
+      muted = target;
+    }),
+    transmitDtmf: vi.fn(async () => undefined),
+    getWxAppMuted: () => muted,
     on(event: string, listener: TaskListener) {
       listeners.set(event, [...(listeners.get(event) ?? []), listener]);
       return task;
     },
-    emitTest(event: string) {
-      for (const listener of listeners.get(event) ?? []) listener(task as unknown as ITask);
+    emitTest(event: string, payload?: unknown) {
+      for (const listener of listeners.get(event) ?? []) {
+        listener(payload ?? (task as unknown as ITask));
+      }
     },
   };
-  return task as unknown as ITask & {emitTest: (event: string) => void};
+  return task as unknown as FakeTask;
 }
 
 function observeTask(controller: WebexPocController, task: ITask): void {
   const internal = controller as unknown as {attachTaskListeners: (candidate: ITask) => void};
   internal.attachTaskListeners(task);
-}
-
-function controllerInternals(controller: WebexPocController) {
-  return controller as unknown as {
-    api: {action: (...args: unknown[]) => Promise<void>; listCalls: () => Promise<unknown[]>};
-    missingCallPolls: number;
-    syncCall: () => Promise<void>;
-    update: (patch: Record<string, unknown>) => void;
-  };
 }
 
 describe('WebexPocController task completion', () => {
@@ -58,31 +83,21 @@ describe('WebexPocController task completion', () => {
     expect(controller.getSnapshot().activeTask).toBeUndefined();
   });
 
-  it('does not let a late hangup response overwrite Contact Center wrap-up', async () => {
+  it('uses the Contact Center task end event to enter wrap-up', async () => {
     const controller = new WebexPocController();
     const task = fakeTask(true);
-    const internal = controllerInternals(controller);
-    observeTask(controller, task);
-    internal.update({callId: 'call-1', callStatus: 'connected', activeTask: task});
-    internal.api = {
-      listCalls: async () => [],
-      action: vi.fn(async () => task.emitTest('task:end')),
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
     };
+    internal.task = task;
+    observeTask(controller, task);
+    internal.update({callStatus: 'connected', endCapable: true, activeTask: task});
+    task.end.mockImplementation(async () => task.emitTest('task:end'));
 
     await controller.endCall();
 
-    expect(controller.getSnapshot().callStatus).toBe('wrap-up');
-  });
-
-  it('does not let Calling polling overwrite Contact Center wrap-up', async () => {
-    const controller = new WebexPocController();
-    const internal = controllerInternals(controller);
-    internal.update({callId: 'call-1', callStatus: 'wrap-up'});
-    internal.missingCallPolls = 1;
-    internal.api = {listCalls: async () => [], action: async () => undefined};
-
-    await internal.syncCall();
-
+    expect(task.end).toHaveBeenCalledOnce();
     expect(controller.getSnapshot().callStatus).toBe('wrap-up');
   });
 });
@@ -132,18 +147,93 @@ describe('WebexPocController idle reasons', () => {
 });
 
 describe('WebexPocController call controls', () => {
-  it('declines by ending the alerting Calling leg', async () => {
+  it('answers a Webex App offer through the Contact Center task', async () => {
     const controller = new WebexPocController();
-    const internal = controllerInternals(controller);
-    const action = vi.fn(async () => undefined);
-    internal.api = {action, listCalls: async () => []};
-    internal.update({callId: 'call-1', callStatus: 'ringing'});
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.update({callStatus: 'ringing', acceptCapable: true});
+
+    await controller.answer();
+
+    expect(task.accept).toHaveBeenCalledOnce();
+    expect(controller.getSnapshot().callStatus).toBe('answering');
+  });
+
+  it('declines a Webex App offer through the Contact Center task', async () => {
+    const controller = new WebexPocController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.update({callStatus: 'ringing', declineCapable: true, activeTask: task});
 
     await controller.decline();
 
-    expect(action).toHaveBeenCalledWith('hangup', {callId: 'call-1'});
+    expect(task.decline).toHaveBeenCalledOnce();
     expect(controller.getSnapshot().callStatus).toBe('none');
     expect(controller.getSnapshot().activeTask).toBeUndefined();
+  });
+
+  it('mutes and sends DTMF through the Contact Center task', async () => {
+    const controller = new WebexPocController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.update({
+      callStatus: 'connected',
+      muteCapable: true,
+      dtmfCapable: true,
+      activeTask: task,
+    });
+
+    await controller.toggleMute();
+    await controller.sendDigit('5');
+
+    expect(task.toggleMute).toHaveBeenCalledWith({muted: true});
+    expect(task.transmitDtmf).toHaveBeenCalledWith({dtmf: '5'});
+    expect(controller.getSnapshot().muted).toBe(true);
+  });
+
+  it('holds and resumes through the Contact Center task', async () => {
+    const controller = new WebexPocController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.update({callStatus: 'connected', holdCapable: true, activeTask: task});
+
+    await controller.toggleHold();
+    await controller.toggleHold();
+
+    expect(task.hold).toHaveBeenCalledOnce();
+    expect(task.resume).toHaveBeenCalledOnce();
+    expect(controller.getSnapshot().callStatus).toBe('connected');
+  });
+
+  it('synchronizes mute changes emitted by the Webex App SDK path', () => {
+    const controller = new WebexPocController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    observeTask(controller, task);
+
+    task.emitTest('task:wxapp-mute-state-updated', {muted: true});
+
+    expect(controller.getSnapshot().muted).toBe(true);
   });
 
   it('uses the Contact Center task for recording controls', async () => {

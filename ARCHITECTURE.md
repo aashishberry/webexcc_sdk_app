@@ -7,7 +7,9 @@ The application provides a consolidated agent interface for Webex Contact Center
 The design separates interaction control from media control:
 
 - Webex Contact Center owns agent registration, station state, routing tasks, recording, consult, conference, transfer, and wrap-up.
-- Webex Calling owns the call presented to Webex App and exposes REST controls for that call.
+- The Contact Center SDK's Webex App Better Together path owns answer, decline, mute, unmute, and DTMF through the public task contract.
+- Contact Center task operations own hold, resume, and end.
+- Direct Webex Calling APIs are used only during setup for profile, extension, device, and preferred-endpoint configuration.
 - Webex App remains the registered endpoint and carries audio.
 - The browser coordinates both systems but does not become a media endpoint.
 
@@ -21,12 +23,13 @@ flowchart LR
     Server["Express OAuth and API server"]
     OAuth["Webex OAuth"]
     WxCC["Webex Contact Center services"]
-    Calling["Webex Calling REST APIs"]
+    Calling["Webex Calling services"]
     App["Webex App endpoint"]
 
     Agent --> UI
     UI --> SDK
     SDK <--> WxCC
+    SDK <--> Calling
     UI <--> Server
     Server <--> OAuth
     Server <--> Calling
@@ -34,24 +37,25 @@ flowchart LR
     WxCC --> App
 ```
 
-The Contact Center SDK connects directly from the browser to Webex services. Calling REST requests are sent through the same-origin Express server so the OAuth refresh token and integration secret do not enter the browser bundle.
+The Contact Center SDK connects directly from the browser to Webex services, routes supported controls to the Webex App call, and owns task-state synchronization. Calling configuration requests are sent through the same-origin Express server so the OAuth refresh token and integration secret do not enter the browser bundle.
 
 ## 3. Component responsibilities
 
 | Component | Responsibilities |
 |---|---|
 | `App.tsx` | Workflow composition, form state, one responsive desktop/mobile UI, in-call next-state selection, consult/conference participant views, banners, menus, theme and alert controls |
-| `WebexPocController.ts` | Contact Center lifecycle, task and conference events, state machine, Calling call association, polling, and action coordination |
-| `server.mjs` | OAuth, token refresh, HTTP-only session cookie, Calling API proxy, diagnostics ingestion, static hosting |
+| `WebexPocController.ts` | Contact Center lifecycle, native task controls, task and conference events, state machine, and action coordination |
+| `server.mjs` | OAuth, token refresh, HTTP-only session cookie, Calling configuration proxy, diagnostics ingestion, static hosting |
 | `callingApi.ts` | Typed same-origin client for server routes |
 | `stationConfiguration.ts` | Extension and endpoint normalization and selection policy |
-| `callMatching.ts` | Safe association of a WxCC task with a Calling REST call |
 | `sessionRecovery.ts` | Minimal recovery hint storage and SDK profile-to-UI state mapping |
 | `useCallAlerts.ts` | Ringtone, notification permission, visibility behavior, and service-worker messages |
 | `call-alert-sw.js` | Notification click/action delivery to an existing browser client |
 | `backendDiagnostics.ts` | Fire-and-forget delivery of allowlisted Contact Center lifecycle events to the server |
 
 The Contact Center package is dynamically imported by the controller during initialization. Authentication and station-setup UI can load without downloading and evaluating the full SDK bundle first.
+
+The POC pins `@webex/contact-center` to `3.12.0-next.116` because the stable `3.12.0` package does not contain this task-based Webex App control path. The prerelease currently requires a local metrics declaration resolution in `tsconfig.app.json` and a narrow `consultTransfer()` task type augmentation; both are compatibility measures, not runtime forks of the SDK.
 
 ## 4. Trust boundaries
 
@@ -149,7 +153,7 @@ sequenceDiagram
     end
     C-->>S: Extension and endpoint configuration
     S-->>UI: Normalized station configuration
-    UI->>SDK: Initialize with OAuth access token
+    UI->>SDK: Initialize with OAuth access token and enableWxBetterTogether
     SDK->>W: Register and load agent profile
     W-->>SDK: Teams, codes, capabilities, session state
     SDK-->>UI: Registered profile
@@ -169,68 +173,59 @@ sequenceDiagram
     participant W as Contact Center
     participant SDK as Contact Center SDK
     participant UI as Controller and UI
-    participant S as Express
-    participant C as Calling REST
+    participant C as Calling services
     participant A as Webex App
 
     W-->>SDK: task:incoming
     SDK-->>UI: ITask with interactionId and caller metadata
-    UI->>S: GET /api/calling/calls
-    S->>C: GET /telephony/calls
-    C-->>S: Active calls
-    S-->>UI: Active calls
-    UI->>UI: Select one safe inbound alerting candidate
-    UI-->>UI: Store interactionId-to-callId relationship
-    UI->>S: POST /api/calling/actions/answer
-    S->>C: POST /telephony/calls/answer
-    C->>A: Answer selected or preferred endpoint
-    C-->>S: Result
-    S-->>UI: Result
+    SDK-->>UI: uiControls.main.accept and decline
+    UI->>SDK: task.accept()
+    SDK->>C: Internally answer task Webex App call
+    C->>A: Answer Webex App endpoint
+    C-->>SDK: Result
+    SDK-->>UI: Task result and UI-control updates
     W-->>SDK: task:established
     SDK-->>UI: Connected task state
+    UI->>SDK: task.hold() or task.resume()
+    SDK->>W: Contact Center AQM hold or unhold
+    W-->>SDK: task:hold or task:resume
+    SDK-->>UI: Updated state and controls
+    UI->>SDK: task.end()
+    SDK->>W: Contact Center AQM end
+    W-->>SDK: task:end or task:wrapup
+    SDK-->>UI: Ended or wrap-up state
 ```
 
-There is no assumption that `interactionId`, Webex correlation identifiers, and Calling `callId` have equal values. The relationship is established from call direction, lifecycle state, caller evidence, and time.
+No browser-side Calling `callId` is required. The SDK derives Webex App device identifiers from task participant data and correlates task operations with Contact Center backend events.
 
-## 8. Call association policy
+## 8. Task state and control policy
 
-### New offer
+The UI treats the SDK task as the single source of truth for the active interaction:
 
-Candidates must:
+- `task.uiControls.main` determines whether answer, decline, hold, mute, keypad, and end are enabled.
+- `task:ui-controls-updated` refreshes capability state.
+- `task:established`, `task:hold`, and `task:resume` determine the connected and held presentation.
+- `task:wxapp-mute-state-updated` synchronizes Webex App mute state.
+- `task:end`, `task:wrapup`, and `task:wrappedup` determine completion and cleanup.
+- `task:hydrate` restores the task and controls after refresh.
 
-- Contain `callId` or `id`
-- Have `personality === "terminator"`
-- Have `state === "alerting"`
-
-If one candidate remains, it is selected. With multiple candidates, caller-number equality or suffix matching receives the strongest score. Call creation proximity to the offer time is the secondary score. A tie is reported as ambiguous and Answer remains disabled.
-
-The lookup uses bounded retries at 0, 250, 500, 1000, 1500, and 2000 milliseconds because Calling REST publication can lag the Contact Center task event.
-
-### Recovered task
-
-Recovery candidates may be `alerting`, `connected`, `held`, or `remoteHeld`. One candidate is selected directly. Multiple candidates require one unique caller-number match; otherwise controls remain disabled.
-
-### Active synchronization
-
-Once associated, the controller polls Calling REST every 1.5 seconds. It synchronizes call state, hold, mute capability, mute state, and endpoint. Two consecutive missing results are required before treating the Calling leg as ended.
+The application no longer lists active Calling calls, matches `interactionId` to `callId`, or polls `/telephony/calls`.
 
 ## 9. Control paths
 
-### Calling REST path
+### Calling configuration path
 
-The browser sends state-changing actions only to same-origin Express routes. Express validates origin, session, action, call identifier, endpoint usage, and DTMF syntax before invoking Webex Calling.
+Express proxies only the setup APIs required to discover and persist the user's station configuration:
 
 ```text
-POST /api/calling/actions/answer
-POST /api/calling/actions/hangup
-POST /api/calling/actions/hold
-POST /api/calling/actions/resume
-POST /api/calling/actions/mute
-POST /api/calling/actions/unmute
-POST /api/calling/actions/transmitDtmf
+GET /telephony/config/people/me
+GET /telephony/config/people/me/settings/contactCenterExtensions
+GET /telephony/config/people/me/settings/preferredAnswerEndpoint
+GET /telephony/config/people/me/settings/availablePreferredAnswerEndpoints
+PUT /telephony/config/people/me/settings/preferredAnswerEndpoint
 ```
 
-Decline uses `hangup` against the alerting Calling leg. After success, the controller clears the local offered-task view so the ended intermediary does not block agent-state controls. Existing task listeners remain able to process a delayed Contact Center completion event.
+There is no application-owned Calling call-control proxy.
 
 ### Contact Center SDK path
 
@@ -239,11 +234,16 @@ These operations execute directly through the SDK:
 - Register and deregister
 - Station login and station logout
 - Agent state changes
+- Webex App answer and decline through `task.accept()` and `task.decline()`
+- Webex App mute and DTMF through `task.toggleMute({muted})` and `task.transmitDtmf({dtmf})`
+- Hold, resume, and call end through `task.hold()`, `task.resume()`, and `task.end()`
 - Recording pause and resume
 - Queue and buddy-agent discovery
 - Consult, transfer, consult transfer, and consult end
 - Consult conference and conference exit
 - Wrap-up
+
+The controller initializes `cc.enableWxBetterTogether: true`, reads `task.uiControls` for action availability, listens for `task:ui-controls-updated`, and synchronizes mute from `task:wxapp-mute-state-updated`. The internal SDK helper names are not called by the application.
 
 ### Consult and conference path
 
@@ -278,7 +278,7 @@ sequenceDiagram
     end
 ```
 
-`exitConference()` removes the current agent and leaves the customer and consulted party connected. The installed task API does not expose arbitrary remote-participant removal, so the UI presents participant identity and status without enabling Drop.
+`exitConference()` removes the current agent and leaves the customer and consulted party connected. The prerelease also exposes `dropConferenceParticipant({participantId})`, but the POC currently reconstructs display-only participant rows without retaining authoritative SDK participant IDs. Drop therefore remains disabled until that roster mapping and its task-state capability are implemented and validated.
 
 ## 10. Controller state model
 
@@ -309,18 +309,9 @@ wrap-up
 ended
 ```
 
-### Association states
+Contact Center task events are authoritative for call state, hold, completion, and wrap-up.
 
-```text
-none
-locating
-wxcc
-ambiguous
-```
-
-Contact Center task events remain authoritative for wrap-up. Calling polling cannot overwrite `wrap-up` with `ended`.
-
-Consultation and conference are orthogonal task modes rather than additional Calling REST states:
+Consultation and conference are orthogonal task modes rather than additional call states:
 
 ```text
 consultActive
@@ -344,7 +335,6 @@ sequenceDiagram
     participant S as Express OAuth session
     participant SDK as Contact Center SDK
     participant W as Contact Center services
-    participant C as Calling REST
 
     UI->>SS: Read extension and endpoint recovery hint
     UI->>S: GET /api/oauth/status
@@ -353,17 +343,14 @@ sequenceDiagram
     SDK->>W: Register and agent reload
     W-->>SDK: Existing station, team, DN, aux code, interactions
     SDK-->>UI: Mutated profile and task:hydrate
-    UI->>UI: Restore lifecycle and task state
-    UI->>C: List current calls through Express
-    C-->>UI: Active Calling legs
-    UI->>UI: Reassociate one safe inbound call
+    UI->>UI: Restore lifecycle, task state, and uiControls
 ```
 
 The SDK and backend are authoritative. Stored browser data is only a signal to attempt recovery and a source for initialization preferences.
 
 If `isAgentLoggedIn` is false, the UI returns to station login without creating a replacement station. If SDK initialization fails, the error is displayed and no cleanup request is sent automatically.
 
-Conference hydration restores the conference mode before Calling-call reassociation. Known participant labels are reconstructed from the agent, caller, and consulted-destination state available to the POC; this is not a complete conference roster service.
+Conference hydration restores the conference mode from the task. Known participant labels are reconstructed from the agent, caller, and consulted-destination state available to the POC; this is not a complete conference roster service.
 
 ## 13. Notification architecture
 
@@ -383,11 +370,11 @@ If no client exists, selecting the notification body can open the application, b
 
 ### Server-native events
 
-Express logs OAuth operations, Calling configuration requests, Calling call controls, failures, duration, and startup directly.
+Express logs OAuth operations, Calling configuration requests, failures, duration, and startup directly.
 
 ### Browser-originated events
 
-Station and Contact Center task operations bypass Express. `backendDiagnostics.ts` sends lifecycle events to:
+Station and Contact Center task operations bypass Express. This includes answer, decline, hold, resume, mute, unmute, DTMF, and end. `backendDiagnostics.ts` sends their allowlisted, non-PII lifecycle events to:
 
 ```text
 POST /api/diagnostics/events
@@ -401,12 +388,11 @@ The endpoint requires a valid session and same-origin request. Event name, outco
 {
   "timestamp": "ISO-8601",
   "level": "info",
-  "event": "calling.call_control",
+  "event": "cc.webex_call_control",
   "requestId": "random request identifier",
   "sessionRef": "truncated SHA-256 session reference",
   "outcome": "succeeded",
-  "action": "answer",
-  "durationMs": 250
+  "action": "accept"
 }
 ```
 
@@ -425,16 +411,13 @@ Conference start and exit report the allowlisted `cc.conference` diagnostic even
 | Contact Center initialization failure | Lifecycle becomes `error`; banner and backend diagnostic are emitted |
 | No assigned team | Initialization fails with an explicit error |
 | Station login failure | Existing configuration remains available for retry |
-| No Calling call found | Contact Center task remains visible; Calling controls stay disabled |
-| Multiple plausible calls | Association becomes `ambiguous`; no call is selected |
-| Calling control failure | State is preserved or restored and a server error event is recorded |
-| Calling leg disappears | Two missing polls mark media ended unless Contact Center is already in wrap-up |
-| Declined offer | Calling leg is ended and the local task view is cleared immediately |
+| SDK task control failure | State is preserved or restored, an application banner is shown, and a non-PII diagnostic is reported |
+| Declined offer | `task.decline()` rejects the Webex App call and the local task view clears after SDK success |
 | Conference start failure | Consultation remains visible and the error is presented in the application banner |
 | Conference exit failure | Conference state remains active and the agent can retry |
-| Participant removal requested | UI keeps the action disabled because no supported task method is exposed |
+| Participant removal requested | UI keeps the action disabled until display rows are backed by authoritative SDK participant IDs |
 | Wrap-up required | Contact Center task remains active until a wrap-up code succeeds |
-| Refresh with valid backend session | Station, agent state, task, and Calling association are restored |
+| Refresh with valid backend session | Station, agent state, active task, and SDK task controls are restored |
 | Refresh without backend session | UI returns to station login |
 
 ## 16. Deployment topology
@@ -461,12 +444,10 @@ The minimum production architecture should add:
 - An encrypted shared session store with expiry and revocation
 - CSRF tokens and request rate limits
 - Multi-tab and multi-device station ownership rules
-- Calling webhooks instead of per-browser polling
-- A server-to-browser event channel such as WebSocket or Server-Sent Events
 - Centralized logs, metrics, traces, alerting, and retention controls
 - Secret management and encryption-key rotation
 - Automated browser compatibility tests
 - Tenant-specific validation for scopes, U2C/SDK client authorization, features, and API availability
 - Dependency vulnerability management and supported Webex SDK upgrade policy
 
-Horizontal scaling is not safe until OAuth sessions and any server-side call-correlation state are shared or externally coordinated.
+Horizontal scaling is not safe until OAuth sessions are stored in a shared, durable service.

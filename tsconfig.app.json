@@ -14,6 +14,12 @@
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@webex/internal-plugin-metrics/src/metrics.types": [
+        "./node_modules/@webex/internal-plugin-metrics/dist/types/metrics.types.d.ts"
+      ]
+    },
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,

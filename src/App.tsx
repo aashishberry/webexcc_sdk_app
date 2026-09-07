@@ -23,13 +23,6 @@ import type {InitializeOptions, LifecycleStatus} from './types';
 
 const digits = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
 
-function associationLabel(kind: string): string {
-  if (kind === 'wxcc') return 'Webex App call matched';
-  if (kind === 'locating') return 'Locating Webex App call…';
-  if (kind === 'ambiguous') return 'Multiple calls found';
-  return 'No Calling call associated';
-}
-
 function sessionStatus(
   lifecycle: LifecycleStatus,
   agentState: string,
@@ -57,9 +50,9 @@ export function App() {
   const [callingConfigurationError, setCallingConfigurationError] = useState('');
   const [answerEndpointId, setAnswerEndpointId] = useState('');
   const [rememberEndpoint, setRememberEndpoint] = useState(false);
-  const [dialpadCallId, setDialpadCallId] = useState('');
+  const [dialpadTaskId, setDialpadTaskId] = useState('');
   const [routeMode, setRouteMode] = useState<'consult' | 'transfer' | ''>('');
-  const [routeCallId, setRouteCallId] = useState('');
+  const [routeTaskId, setRouteTaskId] = useState('');
   const [destinationId, setDestinationId] = useState('');
   const [participantsOpen, setParticipantsOpen] = useState(false);
   const [banner, setBanner] = useState<{kind: 'error'; message: string}>();
@@ -156,11 +149,11 @@ export function App() {
     }
   };
 
-  const canAnswer = snapshot.callStatus === 'ringing' && snapshot.callKind === 'wxcc';
-  const canDecline = snapshot.callStatus === 'ringing' && Boolean(snapshot.callId);
+  const canAnswer = snapshot.callStatus === 'ringing' && snapshot.acceptCapable;
+  const canDecline = snapshot.callStatus === 'ringing' && snapshot.declineCapable;
   const callAlerts = useCallAlerts({
     ringing: snapshot.callStatus === 'ringing',
-    callKey: snapshot.interactionId || snapshot.callId,
+    callKey: snapshot.interactionId,
     callerLabel: snapshot.callerNumber || snapshot.callerName,
     canAnswer,
     canDecline,
@@ -193,8 +186,10 @@ export function App() {
     selectedEndpoint && selectedEndpoint.id === callingConfiguration?.preferred?.id,
   );
   const selectableIdleCodes = snapshot.idleCodes.filter((code) => !code.isSystem);
-  const dialpadOpen = Boolean(snapshot.callId && dialpadCallId === snapshot.callId);
-  const activeRouteMode = routeCallId === snapshot.callId ? routeMode : '';
+  const dialpadOpen = Boolean(
+    snapshot.interactionId && dialpadTaskId === snapshot.interactionId,
+  );
+  const activeRouteMode = routeTaskId === snapshot.interactionId ? routeMode : '';
   const extensionMenuOptions: SelectMenuOption[] = extensionOptions.map((extension) => {
     const value = stationValue(extension);
     return {
@@ -236,7 +231,7 @@ export function App() {
     group: destination.type === 'agent' ? 'Agents' : 'Queues',
   }));
   const topbarSubtitle = !initialized
-    ? 'Contact Center + Calling controls'
+    ? 'Contact Center + Webex App controls'
     : `Extension ${snapshot.extension}${stationLoggedIn && selectedTeam ? ` · ${selectedTeam.name}` : ''}`;
 
   const selectExtension = (extension: string) => {
@@ -272,7 +267,7 @@ export function App() {
 
   const openRoutePanel = async (mode: 'consult' | 'transfer') => {
     setRouteMode(mode);
-    setRouteCallId(snapshot.callId);
+    setRouteTaskId(snapshot.interactionId);
     setDestinationId('');
     if (!snapshot.destinationsLoaded) {
       await run('destinations', () => controller.loadDestinations());
@@ -297,9 +292,9 @@ export function App() {
     setCallingConfigurationError('');
     setAnswerEndpointId('');
     setRememberEndpoint(false);
-    setDialpadCallId('');
+    setDialpadTaskId('');
     setRouteMode('');
-    setRouteCallId('');
+    setRouteTaskId('');
     setDestinationId('');
     setParticipantsOpen(false);
     setForm({accessToken: '', extension: ''});
@@ -534,7 +529,7 @@ export function App() {
                 <dl className="facts station-facts">
                   <div><dt>Extension</dt><dd>{snapshot.extension}</dd></div>
                   <div><dt>Answer endpoint</dt><dd>{snapshot.endpointName || 'Primary device fallback'}</dd></div>
-                  <div><dt>Calling REST</dt><dd>{snapshot.lineStatus}</dd></div>
+                  <div><dt>Webex endpoint</dt><dd>{snapshot.lineStatus}</dd></div>
                 </dl>
               )}
             </>
@@ -586,7 +581,7 @@ export function App() {
                     <strong>{snapshot.agentState === 'Available' ? 'Ready for an incoming task' : 'Agent is idle'}</strong>
                     <span>
                       {snapshot.agentState === 'Available'
-                        ? 'Contact Center is listening for interactions. Calling controls remain idle until a task arrives.'
+                        ? 'Contact Center is listening for interactions. Task controls remain idle until a call arrives.'
                         : 'Change the agent state to Available when you are ready to receive calls.'}
                     </span>
                   </div>
@@ -606,16 +601,13 @@ export function App() {
                       <strong>{snapshot.callerName || 'Contact Center caller'}</strong>
                       <span>{snapshot.callerNumber || 'Number unavailable'}</span>
                     </div>
-                    <span className={`association association-${snapshot.callKind}`}>
-                      {associationLabel(snapshot.callKind)}
-                    </span>
+                    <span className="association association-wxcc">SDK controlled</span>
                   </div>
 
                   <details className="call-metadata">
                     <summary>Interaction details</summary>
                     <div className="id-grid">
                       <div><span>WxCC interactionId</span><code title={snapshot.interactionId}>{snapshot.interactionId || '—'}</code></div>
-                      <div><span>Calling callId</span><code title={snapshot.callId}>{snapshot.callId || '—'}</code></div>
                     </div>
                   </details>
 
@@ -678,7 +670,7 @@ export function App() {
                         </button>
                         <button
                           className={`phone-control ${snapshot.held ? 'active' : ''}`}
-                          disabled={busy !== '' || !snapshot.callId || !['connected', 'held'].includes(snapshot.callStatus)}
+                          disabled={busy !== '' || !snapshot.holdCapable}
                           onClick={() => run('hold', () => controller.toggleHold())}
                         >
                           <span><ControlIcon name="hold" /></span>
@@ -686,12 +678,12 @@ export function App() {
                         </button>
                         <button
                           className={`phone-control ${dialpadOpen ? 'active' : ''}`}
-                          disabled={busy !== '' || snapshot.callStatus !== 'connected'}
+                          disabled={busy !== '' || !snapshot.dtmfCapable}
                           aria-expanded={dialpadOpen}
                           aria-controls="dtmf-dialpad"
                           onClick={() => {
                             setRouteMode('');
-                            setDialpadCallId(dialpadOpen ? '' : snapshot.callId);
+                            setDialpadTaskId(dialpadOpen ? '' : snapshot.interactionId);
                           }}
                         >
                           <span><ControlIcon name="keypad" /></span>
@@ -710,7 +702,7 @@ export function App() {
                           className={`phone-control ${activeRouteMode === 'consult' || snapshot.consultActive || snapshot.conferenceActive ? 'active' : ''}`}
                           disabled={busy !== '' || snapshot.consultActive}
                           onClick={() => {
-                            setDialpadCallId('');
+                            setDialpadTaskId('');
                             if (snapshot.conferenceActive) setParticipantsOpen((open) => !open);
                             else void openRoutePanel('consult');
                           }}
@@ -722,7 +714,7 @@ export function App() {
                           className={`phone-control ${activeRouteMode === 'transfer' ? 'active' : ''}`}
                           disabled={busy !== '' || snapshot.consultActive || snapshot.conferenceActive}
                           onClick={() => {
-                            setDialpadCallId('');
+                            setDialpadTaskId('');
                             void openRoutePanel('transfer');
                           }}
                         >
@@ -737,7 +729,7 @@ export function App() {
                           {digits.map((digit) => (
                             <button
                               key={digit}
-                              disabled={busy !== '' || snapshot.callStatus !== 'connected'}
+                              disabled={busy !== '' || !snapshot.dtmfCapable}
                               onClick={() => run(`dtmf-${digit}`, () => controller.sendDigit(digit))}
                             >{digit}</button>
                           ))}
@@ -773,7 +765,7 @@ export function App() {
                               if (activeRouteMode === 'consult') await controller.consult(destinationId);
                               else await controller.transfer(destinationId);
                               setRouteMode('');
-                              setRouteCallId('');
+                              setRouteTaskId('');
                             })}
                           >
                             {activeRouteMode === 'consult' ? 'Start consult' : 'Transfer now'}
@@ -852,7 +844,7 @@ export function App() {
                       {['connected', 'held'].includes(snapshot.callStatus) && (
                         <button
                           className="end-call-button"
-                          disabled={busy !== '' || !snapshot.callId}
+                          disabled={busy !== '' || !snapshot.endCapable}
                           onClick={() => run('end', () => controller.endCall())}
                         >
                           <span><ControlIcon name="phone" /></span>

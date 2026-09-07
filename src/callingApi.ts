@@ -1,31 +1,3 @@
-export type CallingState =
-  | 'connecting'
-  | 'alerting'
-  | 'connected'
-  | 'held'
-  | 'remoteHeld'
-  | 'disconnected';
-
-export interface CallingParty {
-  name?: string;
-  number?: string;
-  privacyEnabled?: boolean;
-}
-
-export interface CallingRestCall {
-  id?: string;
-  callId?: string;
-  callSessionId?: string;
-  personality?: 'originator' | 'terminator' | 'clickToDial';
-  state?: CallingState;
-  remoteParty?: CallingParty;
-  endpointId?: string;
-  endpointType?: string;
-  created?: string;
-  muteCapable?: boolean;
-  muted?: boolean;
-}
-
 export interface OAuthStatus {
   configured: boolean;
   authenticated: boolean;
@@ -106,24 +78,4 @@ export function setPreferredAnswerEndpoint(endpointId: string | null): Promise<v
     method: 'PUT',
     body: JSON.stringify({endpointId}),
   });
-}
-
-export class CallingApiClient {
-  async listCalls(): Promise<CallingRestCall[]> {
-    const payload = await requestJson<CallingRestCall[] | {items?: CallingRestCall[]}>(
-      '/api/calling/calls',
-    );
-    if (Array.isArray(payload)) return payload;
-    return payload.items ?? [];
-  }
-
-  action(
-    action: 'answer' | 'hangup' | 'hold' | 'resume' | 'mute' | 'unmute' | 'transmitDtmf',
-    payload: {callId: string; endpointId?: string; dtmf?: string},
-  ): Promise<void> {
-    return requestJson<void>(`/api/calling/actions/${action}`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-  }
 }

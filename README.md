@@ -1,8 +1,8 @@
-# Webex Contact Center and Calling REST Agent Console POC
+# Webex Contact Center Webex App Agent Console POC
 
 This project implements a single browser-based agent console for Webex Contact Center while retaining Webex App as the Calling media endpoint.
 
-The browser does not register as a Calling endpoint, request microphone access, or transport audio. Webex Contact Center provides the routed interaction and agent workflow. Webex Calling REST call controls operate the corresponding call on the selected or preferred Webex App endpoint.
+The browser does not register as a Calling endpoint, request microphone access, or transport audio. Webex Contact Center provides the routed interaction and agent workflow. The Contact Center task API now owns answer, decline, hold, resume, mute, unmute, DTMF, end, and all subsequent interaction controls while Webex App remains the media endpoint.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, state ownership, recovery behavior, and production considerations.
 
@@ -17,11 +17,11 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, st
 | Contact Center startup | `@webex/contact-center` initialization, registration, team discovery, and extension station login |
 | Agent state | Available and configured non-system Idle reason selection, including next-state selection during an active call |
 | Incoming task | WxCC task events drive the interaction lifecycle |
-| Call association | The WxCC task is matched to an inbound Calling REST call; `interactionId` and `callId` are not expected to be equal |
-| Calling controls | Answer, decline, hold, resume, mute, unmute, DTMF, and hangup |
+| Native Webex App controls | Contact Center task UI capabilities and methods drive answer, decline, mute, unmute, and DTMF without browser call-ID matching |
+| Native voice controls | Contact Center task capabilities and methods drive answer, decline, hold, resume, mute, unmute, DTMF, and end without browser call-ID matching or polling |
 | Contact Center controls | Pause/resume recording, consult, transfer, consult transfer, consult end, consult conference, conference exit, and wrap-up |
 | Endpoint preference | Optional persistence of the selected Webex Calling answer endpoint |
-| Refresh recovery | SDK automated relogin, station-state restoration, task hydration, and active Calling call reassociation |
+| Refresh recovery | SDK automated relogin, station-state restoration, and task hydration |
 | Alerts | Web Audio ringtone and background operating-system notification with supported actions |
 | User interface | One responsive desktop/mobile layout with icon-first call controls, consult and conference participant views, system/light/dark themes, custom accessible selectors, banners, and diagnostics |
 | Logging | Structured backend lifecycle and action logs with allowlisted, non-PII browser diagnostics |
@@ -31,14 +31,16 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, st
 - React 18 and TypeScript
 - Vite 7
 - Express 5
-- `@webex/contact-center` 3.12.0
-- Webex Calling REST APIs
+- `@webex/contact-center` 3.12.0-next.116, pinned for Webex App Better Together task controls
+- Webex Calling configuration APIs and SDK-internal telephony controls
 - Browser Notifications API, Service Worker API, and Web Audio API
 - Vitest, Testing Library, and ESLint
 
 Node.js 22 is recommended for local and hosted execution.
 
 The Contact Center dependency is loaded only when initialization starts. This keeps the initial authentication and setup bundle substantially smaller while deferring the SDK cost to the point at which it is required.
+
+`3.12.0-next.116` is a prerelease. The project includes two narrow TypeScript compatibility workarounds for that package: `tsconfig.app.json` resolves an upstream source-only metrics type import to its emitted declaration, and the controller locally augments `ITask` for the shipped `consultTransfer()` implementation that is missing from the prerelease interface. Revisit and remove both after upgrading to a stable release that contains the Better Together controls.
 
 ## Webex integration configuration
 
@@ -72,6 +74,8 @@ cjp:config_write
 ```
 
 `spark:telephony_config_write` is required only when the user chooses to persist a preferred answer endpoint. Remove that feature and scope together if endpoint preference will be read-only.
+
+`spark:calls_read` and `spark:calls_write` remain required by the SDK's Webex App Better Together implementation. The application no longer calls `/telephony/calls` directly, but the SDK internally uses those Webex Calling operations for answer, decline, mute synchronization, and DTMF.
 
 The Webex OAuth client must also be authorized to use the Contact Center SDK service-discovery path in the target environment. An OAuth token containing the correct scopes does not by itself resolve a client allowlisting failure from U2C service discovery.
 
@@ -119,14 +123,13 @@ npm start
 6. Select an assigned team and complete extension station login.
 7. Change agent state to Available.
 8. Route a Webex Contact Center voice interaction to the agent.
-9. Confirm that the task is associated with one Calling REST call.
-10. Answer or decline the call.
-11. During a connected call, optionally select the Available or Idle reason that should follow the interaction.
-12. Use Calling and Contact Center controls as applicable.
-13. Start a consultation, then end it, complete the transfer, or merge it into a three-party conference.
-14. From a conference, inspect participants or exit and leave the customer connected to the consulted party.
-15. End the call and submit a wrap-up reason when required.
-16. Use the dedicated Logout action for ordered cleanup.
+9. Answer or decline the call as soon as the SDK enables the corresponding task control.
+10. During a connected call, optionally select the Available or Idle reason that should follow the interaction.
+11. Use the task controls as applicable.
+12. Start a consultation, then end it, complete the transfer, or merge it into a three-party conference.
+13. From a conference, inspect participants or exit and leave the customer connected to the consulted party.
+14. End the call and submit a wrap-up reason when required.
+15. Use the dedicated Logout action for ordered cleanup.
 
 ## Control ownership
 
@@ -135,19 +138,19 @@ npm start
 | Contact Center initialization | Contact Center SDK | `Webex.init`, ready event, and `cc.register()` |
 | Station login/logout | Contact Center SDK | Extension login and ordered station cleanup |
 | Available/Idle | Contact Center SDK | Agent-state APIs and configured auxiliary codes; the selector remains available during connected calls to establish the agent's following state |
-| Answer | Calling REST | Answers on the selected endpoint, or the primary-device fallback |
-| Decline | Calling REST | Ends the alerting Calling leg with `hangup`; the local offered-task view clears immediately |
-| Hold/resume | Calling REST | Uses the active Calling `callId` |
-| Mute/unmute | Calling REST | Enabled only when the call reports `muteCapable` |
-| DTMF | Calling REST | Sends a validated digit sequence; digits are not logged |
-| Hangup | Calling REST | Ends the active Calling leg |
+| Answer | Contact Center SDK task | `task.accept()` routes internally to Webex App when `enableWxBetterTogether` is enabled and the task advertises an enabled `uiControls.main.accept` control |
+| Decline | Contact Center SDK task | `task.decline()` routes internally to Webex App reject; the local offered-task view clears after success |
+| Hold/resume | Contact Center SDK task | `task.hold()` and `task.resume()`, gated by `uiControls.main.hold` and synchronized by task events |
+| Mute/unmute | Contact Center SDK task | `task.toggleMute({muted})`, gated by `uiControls.main.mute`; Webex App changes synchronize through `task:wxapp-mute-state-updated` |
+| DTMF | Contact Center SDK task | `task.transmitDtmf({dtmf})`, gated by `uiControls.main.keypad`; digits are not sent to backend diagnostics |
+| End call | Contact Center SDK task | `task.end()`, gated by `uiControls.main.end`; wrap-up remains backend-authoritative |
 | Recording pause/resume | Contact Center SDK task | Available only when the interaction advertises pause/resume capability |
 | Consult/transfer | Contact Center SDK task | Uses eligible agents and telephony queues returned by the SDK |
 | Consult conference | Contact Center SDK task | `consultConference()` merges the held customer and consulted destination into a three-party conference |
 | Conference exit | Contact Center SDK task | `exitConference()` removes the current agent and leaves the other conference parties connected |
 | Wrap-up | Contact Center SDK task | Uses configured wrap-up codes after the task enters wrap-up |
 
-The installed Contact Center task API does not expose an operation for the current agent to remove an arbitrary remote conference participant. The participant-management view therefore displays known parties but keeps Drop unavailable. This must not be enabled unless a supported tenant/API capability is identified and validated.
+The prerelease exposes `task.dropConferenceParticipant({participantId})`, but the POC participant view currently uses reconstructed display rows rather than authoritative SDK participant IDs. Drop remains unavailable until the conference roster is mapped to those IDs and the control is validated against the task state.
 
 ## Station and endpoint selection
 
@@ -175,19 +178,42 @@ When the user selects Use as my preferred Webex Calling answer device, the serve
 PUT /telephony/config/people/me/settings/preferredAnswerEndpoint
 ```
 
-## Call association
+## Webex App Better Together SDK contract
 
-For a new offer, candidate calls must have:
+The prerelease is initialized with:
 
-- A Calling call identifier
-- Inbound `terminator` personality
-- `alerting` state
+```ts
+config: {
+  cc: {
+    allowMultiLogin: false,
+    allowAutomatedRelogin: true,
+    enableWxBetterTogether: true,
+  },
+}
+```
 
-Caller number and creation time are used to rank multiple candidates. If two candidates remain equally plausible, Answer stays disabled.
+Although the implementation contains internal helpers named `acceptOnWebex`, `rejectOnWebex`, and `toggleMuteOnWebex`, application code uses the public task contract:
 
-During refresh recovery, the matcher also accepts inbound `connected`, `held`, and `remoteHeld` calls. It selects a single candidate or a unique caller-number match; it does not guess between ambiguous active calls.
+```ts
+await task.accept();
+await task.decline();
+await task.hold();
+await task.resume();
+await task.toggleMute({muted: true});
+await task.transmitDtmf({dtmf: '5'});
+await task.end();
+```
 
-Active calls are polled every 1.5 seconds to synchronize connected, held, mute, and ended state. Successful polling is not written to backend logs.
+The SDK decides how to route these operations from the task's agent participant metadata and state machine. Answer, decline, mute, and DTMF use the Webex App Better Together path. Hold, resume, and end use Contact Center AQM task operations. The application binds action availability to `task.uiControls` and listens for task lifecycle events instead of inferring state from a Calling REST call ID.
+
+The selected endpoint is still useful as the user's Webex Calling preference before station login. It is not passed to `task.accept()`; the SDK uses the Webex App device identifiers carried by the offered Contact Center task.
+
+Upstream references:
+
+- [Contact Center SDK introduction](https://developer.webex.com/webex-contact-center/docs/sdks/webex-contact-center-web-sdk-introduction)
+- [Contact Center package](https://www.npmjs.com/package/@webex/contact-center)
+- [Voice task routing on the upstream next branch](https://github.com/webex/webex-js-sdk/blob/next/packages/%40webex/contact-center/src/services/task/voice/Voice.ts)
+- [Task controls and events on the upstream next branch](https://github.com/webex/webex-js-sdk/blob/next/packages/%40webex/contact-center/src/services/task/types.ts)
 
 ## Refresh recovery
 
@@ -203,8 +229,7 @@ The access token is not stored in browser storage. On a same-tab refresh:
 3. `cc.register()` attempts the SDK silent relogin.
 4. The returned profile is authoritative for station login, team, device type, extension, and auxiliary state.
 5. `task:hydrate` restores an active Contact Center interaction.
-6. The application lists Calling calls and associates a matching active inbound call.
-7. Applicable call controls are restored.
+6. `task.uiControls` and task events restore the applicable controls and call state.
 
 If no backend station exists, the UI stops at normal station login. Recovery failure displays an error and does not issue a station logout against a possibly valid backend session. Explicit Logout clears the recovery hint.
 
@@ -236,8 +261,7 @@ The server emits one-line JSON records suitable for Render log streams. Covered 
 - OAuth authorization, callback, status, and logout
 - Calling profile and station-configuration discovery
 - Contact Center initialization, station login, state, task, recording, consult, conference, transfer, wrap-up, and logout
-- Calling call-control start, success, failure, action, and duration
-- Calling API and polling failures
+- SDK task answer, decline, hold, resume, mute, unmute, DTMF, and end outcomes reported through allowlisted non-PII diagnostics
 
 Contact Center SDK actions occur directly in the browser. The browser reports allowlisted lifecycle milestones to `POST /api/diagnostics/events`. The server accepts only known events, outcomes, and fields.
 
@@ -265,7 +289,7 @@ WEBEX_SCOPES=<configured scopes>
 NODE_VERSION=22
 ```
 
-Register the same HTTPS redirect URI on the Webex Integration. Express binds to Render's `PORT` on `0.0.0.0`, terminates OAuth callbacks, proxies Calling REST requests, and serves the built Vite assets.
+Register the same HTTPS redirect URI on the Webex Integration. Express binds to Render's `PORT` on `0.0.0.0`, terminates OAuth callbacks, proxies the Calling configuration requests used by setup, and serves the built Vite assets.
 
 `GET /healthz` returns HTTP 204 without reading OAuth state, invoking Webex APIs, or writing an operational log entry. Do not use `/api/oauth/status` as the infrastructure health check because it performs application-session work and records an OAuth status event.
 
@@ -280,7 +304,6 @@ Implemented controls:
 - Secure session cookie in production
 - Same-origin validation on state-changing proxy routes
 - Server-side client secret and refresh token
-- Calling action and DTMF validation
 - Allowlisted client diagnostic events
 - Bounded Express JSON request size
 - No PII or Webex identifiers in backend operational logs
@@ -291,7 +314,6 @@ Required before production:
 - Add explicit CSRF tokens in addition to same-origin and same-site protections.
 - Define session expiration, revocation, cleanup, and key rotation.
 - Add multi-tab ownership so one agent session has one controlling tab.
-- Replace Calling polling with `telephony_calls` webhooks and a server-to-browser delivery channel.
 - Add centralized monitoring, alerting, and log-retention policy.
 - Add rate limits for OAuth, diagnostics, and call-control proxy routes.
 - Validate browser, operating-system, Webex App, endpoint, and tenant compatibility.
@@ -305,16 +327,15 @@ npm run lint
 npm run build
 ```
 
-The test suite covers team normalization, station configuration, custom selectors, call matching, call-control state, wrap-up behavior, idle reasons, and refresh recovery.
+The test suite covers team normalization, station configuration, custom selectors, native SDK call controls and mute synchronization, call-control state, wrap-up behavior, idle reasons, and refresh recovery.
 
 ## Source layout
 
 ```text
-server.mjs                    OAuth server, Calling API proxy, static host, structured logs
+server.mjs                    OAuth server, Calling configuration proxy, static host, structured logs
 src/App.tsx                   Agent-console UI and workflow composition
-src/WebexPocController.ts     Contact Center and Calling lifecycle orchestration
+src/WebexPocController.ts     Contact Center task and Webex App control orchestration
 src/callingApi.ts             Same-origin browser API client and response types
-src/callMatching.ts           New-offer and refresh-recovery call association
 src/stationConfiguration.ts   Extension and endpoint selection policy
 src/sessionRecovery.ts        Same-tab recovery hint and profile-state mapping
 src/backendDiagnostics.ts     Allowlisted lifecycle reporting transport

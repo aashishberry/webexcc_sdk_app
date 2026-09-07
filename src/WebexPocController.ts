@@ -1,6 +1,4 @@
 import type {ITask, Profile} from '@webex/contact-center';
-import {selectIncomingCall, selectRecoverableCall} from './callMatching';
-import {CallingApiClient, type CallingRestCall} from './callingApi';
 import {reportBackendEvent} from './backendDiagnostics';
 import {normalizeTeams} from './normalizers';
 import {recoveredAgentSession} from './sessionRecovery';
@@ -14,6 +12,7 @@ import {
 
 type SnapshotListener = (snapshot: ControllerSnapshot) => void;
 type WebexInitializer = {init: (options: Record<string, unknown>) => any};
+type ConsultTransferTask = ITask & {consultTransfer: () => Promise<unknown>};
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -25,16 +24,25 @@ function errorMessage(error: unknown): string {
   }
 }
 
-function restCallId(call: CallingRestCall): string {
-  return call.callId || call.id || '';
-}
-
 function incomingNumber(task: ITask): string {
   const data = task.data as unknown as Record<string, any>;
   return (
     data.callProcessingDetails?.ani ||
     data.interaction?.callProcessingDetails?.ani ||
     data.interaction?.media?.[0]?.ani ||
+    ''
+  );
+}
+
+function incomingName(task: ITask): string {
+  const data = task.data as unknown as Record<string, any>;
+  const participants = Object.values(data.interaction?.participants ?? {}) as Array<Record<string, any>>;
+  const customer = participants.find((participant) => participant.pType === 'Customer');
+  return (
+    data.callProcessingDetails?.customerName ||
+    data.interaction?.callProcessingDetails?.customerName ||
+    customer?.name ||
+    customer?.pName ||
     ''
   );
 }
@@ -55,6 +63,18 @@ function recordingPaused(task: ITask): boolean {
   return value === true || value === 'true' || value === 'TRUE';
 }
 
+function taskControlState(task: ITask) {
+  const main = task.uiControls?.main;
+  return {
+    acceptCapable: Boolean(main?.accept?.isEnabled),
+    declineCapable: Boolean(main?.decline?.isEnabled),
+    holdCapable: Boolean(main?.hold?.isEnabled),
+    endCapable: Boolean(main?.end?.isEnabled),
+    muteCapable: Boolean(main?.mute?.isEnabled),
+    dtmfCapable: Boolean(main?.keypad?.isEnabled),
+  };
+}
+
 export class WebexPocController {
   private snapshot: ControllerSnapshot = structuredClone(initialSnapshot);
   private listeners = new Set<SnapshotListener>();
@@ -62,10 +82,6 @@ export class WebexPocController {
   private cc: any;
   private profile?: Profile;
   private task?: ITask;
-  private api = new CallingApiClient();
-  private callPollTimer?: number;
-  private missingCallPolls = 0;
-  private offerGeneration = 0;
   private logSequence = 0;
   private observedTasks = new WeakSet<ITask>();
 
@@ -127,8 +143,8 @@ export class WebexPocController {
     });
     this.log(
       options.answerEndpoint
-        ? `Answer endpoint selected: ${options.answerEndpoint.name}.`
-        : 'No answer endpoint selected; Answer will use the primary device.',
+        ? `Preferred Webex App endpoint selected: ${options.answerEndpoint.name}.`
+        : 'No endpoint preference selected; Webex will use its configured device routing.',
       options.answerEndpoint ? 'success' : 'warning',
     );
 
@@ -139,7 +155,11 @@ export class WebexPocController {
         credentials: {access_token: options.accessToken.trim()},
         config: {
           logger: {level: 'error'},
-          cc: {allowMultiLogin: false, allowAutomatedRelogin: true},
+          cc: {
+            allowMultiLogin: false,
+            allowAutomatedRelogin: true,
+            enableWxBetterTogether: true,
+          },
         },
       });
 
@@ -274,70 +294,94 @@ export class WebexPocController {
   }
 
   async answer(): Promise<void> {
-    if (!this.snapshot.callId) throw new Error('No Webex Calling call is associated with this task.');
+    if (!this.task || !this.snapshot.acceptCapable) {
+      throw new Error('The Contact Center task is not ready to be answered on Webex App.');
+    }
     this.update({callStatus: 'answering', error: ''});
+    reportBackendEvent('cc.webex_call_control', 'started', {action: 'accept'});
     try {
-      await this.api.action('answer', {
-        callId: this.snapshot.callId,
-        ...(this.snapshot.endpointId ? {endpointId: this.snapshot.endpointId} : {}),
-      });
-      this.log('Answer sent to the Webex App through Call Controls.', 'success');
-      window.setTimeout(() => void this.syncCall(), 350);
+      await this.task.accept();
+      this.update({...taskControlState(this.task)});
+      this.log('Call accepted on Webex App through the Contact Center SDK.', 'success');
+      reportBackendEvent('cc.webex_call_control', 'succeeded', {action: 'accept'});
     } catch (error) {
-      this.update({callStatus: 'ringing'});
+      this.update({callStatus: 'ringing', ...taskControlState(this.task)});
+      reportBackendEvent('cc.webex_call_control', 'failed', {action: 'accept'});
       this.fail('Answer failed', error);
     }
   }
 
   async decline(): Promise<void> {
-    if (!this.snapshot.callId || this.snapshot.callStatus !== 'ringing') {
-      throw new Error('A ringing Webex Calling call is required.');
+    if (!this.task || this.snapshot.callStatus !== 'ringing' || !this.snapshot.declineCapable) {
+      throw new Error('The Contact Center task is not ready to be declined on Webex App.');
     }
+    reportBackendEvent('cc.webex_call_control', 'started', {action: 'decline'});
     try {
-      await this.api.action('hangup', {callId: this.snapshot.callId});
-      this.log('Alerting Webex App call declined by ending its Calling leg.', 'success');
+      await this.task.decline();
+      this.log('Call declined on Webex App through the Contact Center SDK.', 'success');
+      reportBackendEvent('cc.webex_call_control', 'succeeded', {action: 'decline'});
       this.clearCallState();
     } catch (error) {
+      reportBackendEvent('cc.webex_call_control', 'failed', {action: 'decline'});
       this.fail('Decline failed', error);
     }
   }
 
   async toggleMute(): Promise<void> {
-    if (!this.snapshot.callId) throw new Error('An active call is required.');
-    if (!this.snapshot.muteCapable) throw new Error('This Webex endpoint did not report remote mute support.');
-    const action = this.snapshot.muted ? 'unmute' : 'mute';
+    if (!this.task || !this.snapshot.muteCapable) {
+      throw new Error('Mute is not available for this Contact Center task.');
+    }
+    const targetMuted = !this.snapshot.muted;
+    const action = targetMuted ? 'mute' : 'unmute';
+    reportBackendEvent('cc.webex_call_control', 'started', {action});
     try {
-      await this.api.action(action, {callId: this.snapshot.callId});
-      this.update({muted: !this.snapshot.muted});
+      await this.task.toggleMute({muted: targetMuted});
+      this.update({muted: this.task.getWxAppMuted?.() ?? targetMuted});
       this.log(action === 'mute' ? 'Webex App muted.' : 'Webex App unmuted.', 'success');
+      reportBackendEvent('cc.webex_call_control', 'succeeded', {action});
     } catch (error) {
+      reportBackendEvent('cc.webex_call_control', 'failed', {action});
       this.fail('Mute control failed', error);
     }
   }
 
   async sendDigit(digit: string): Promise<void> {
-    if (!this.snapshot.callId || this.snapshot.callStatus !== 'connected') {
-      throw new Error('DTMF requires a connected call.');
+    if (!this.task || !this.snapshot.dtmfCapable) {
+      throw new Error('DTMF is not available for this Contact Center task.');
     }
+    reportBackendEvent('cc.webex_call_control', 'started', {action: 'dtmf'});
     try {
-      await this.api.action('transmitDtmf', {callId: this.snapshot.callId, dtmf: digit});
+      await this.task.transmitDtmf({dtmf: digit});
       this.log(`DTMF ${digit} sent.`);
+      reportBackendEvent('cc.webex_call_control', 'succeeded', {action: 'dtmf'});
     } catch (error) {
+      reportBackendEvent('cc.webex_call_control', 'failed', {action: 'dtmf'});
       this.fail('DTMF failed', error);
     }
   }
 
   async toggleHold(): Promise<void> {
-    if (!this.snapshot.callId) throw new Error('An active call is required.');
+    if (!this.task || !this.snapshot.holdCapable) {
+      throw new Error('Hold or resume is not available for this Contact Center task.');
+    }
+    const wasHeld = this.snapshot.held;
     const action = this.snapshot.held ? 'resume' : 'hold';
+    reportBackendEvent('cc.webex_call_control', 'started', {action});
     try {
-      await this.api.action(action, {callId: this.snapshot.callId});
-      this.update({held: !this.snapshot.held, callStatus: this.snapshot.held ? 'connected' : 'held'});
+      if (wasHeld) await this.task.resume();
+      else await this.task.hold();
+      this.update({
+        held: !wasHeld,
+        callStatus: wasHeld ? 'connected' : 'held',
+        ...taskControlState(this.task),
+      });
       this.log(
         action === 'hold' ? 'Webex App call held.' : 'Webex App call resumed.',
         'success',
       );
+      reportBackendEvent('cc.webex_call_control', 'succeeded', {action});
     } catch (error) {
+      reportBackendEvent('cc.webex_call_control', 'failed', {action});
       this.fail('Hold/resume failed', error);
     }
   }
@@ -436,7 +480,7 @@ export class WebexPocController {
   async completeConsultTransfer(): Promise<void> {
     if (!this.task || !this.snapshot.consultActive) throw new Error('No active consultation.');
     try {
-      await this.task.consultTransfer();
+      await (this.task as ConsultTransferTask).consultTransfer();
       this.log('Consult transfer completed.', 'success');
       reportBackendEvent('cc.consult_transfer', 'succeeded');
     } catch (error) {
@@ -487,17 +531,17 @@ export class WebexPocController {
   }
 
   async endCall(): Promise<void> {
-    if (!this.snapshot.callId) throw new Error('There is no active Webex Calling call.');
+    if (!this.task || !this.snapshot.endCapable) {
+      throw new Error('End is not available for this Contact Center task.');
+    }
+    reportBackendEvent('cc.webex_call_control', 'started', {action: 'end'});
     try {
-      await this.api.action('hangup', {callId: this.snapshot.callId});
-      this.update({
-        ...(this.snapshot.callStatus === 'wrap-up' ? {} : {callStatus: 'ended' as const}),
-        muted: false,
-        held: false,
-      });
-      this.log('Hangup sent through Call Controls.', 'success');
+      await this.task.end();
+      this.log('Contact Center task end completed.', 'success');
+      reportBackendEvent('cc.webex_call_control', 'succeeded', {action: 'end'});
     } catch (error) {
-      this.fail('Hangup failed', error);
+      reportBackendEvent('cc.webex_call_control', 'failed', {action: 'end'});
+      this.fail('End call failed', error);
     }
   }
 
@@ -527,7 +571,6 @@ export class WebexPocController {
     );
     this.setLifecycle('logging-out', 'Logging out');
     reportBackendEvent('cc.logout', 'started');
-    this.stopCallPolling();
     this.log('Starting ordered station cleanup.');
     try {
       if (this.cc && wasStationLoggedIn) {
@@ -564,13 +607,14 @@ export class WebexPocController {
       this.task = task;
       this.attachTaskListeners(task);
       const interactionId = task.data.interactionId;
-      this.offerGeneration += 1;
       this.update({
         activeTask: task,
         interactionId,
         callStatus: 'ringing',
-        callKind: 'locating',
+        callerName: incomingName(task),
         callerNumber: incomingNumber(task),
+        ...taskControlState(task),
+        muted: task.getWxAppMuted?.() ?? false,
         recordingPauseCapable: recordingPauseEnabled(task),
         recordingPaused: false,
         consultActive: false,
@@ -580,9 +624,8 @@ export class WebexPocController {
         destinationsLoaded: false,
         error: '',
       });
-      this.log(`WxCC task offered: ${interactionId}. Locating the alerting Webex call.`, 'success');
+      this.log(`WxCC task offered: ${interactionId}.`, 'success');
       reportBackendEvent('cc.task', 'observed', {state: 'ringing'});
-      void this.locateCallingCall(task, this.offerGeneration);
     });
     this.cc.on('task:hydrate', (task: ITask) => {
       this.restoreHydratedTask(task);
@@ -592,7 +635,6 @@ export class WebexPocController {
   private restoreHydratedTask(task: ITask): void {
     this.task = task;
     this.attachTaskListeners(task);
-    this.offerGeneration += 1;
     const data = task.data as unknown as Record<string, any>;
     const interaction = data.interaction ?? {};
     const state = String(interaction.state ?? '').toLowerCase();
@@ -612,8 +654,10 @@ export class WebexPocController {
       activeTask: task,
       interactionId: task.data.interactionId,
       callStatus,
-      callKind: wrapup || terminated ? 'none' : 'locating',
+      callerName: incomingName(task),
       callerNumber: incomingNumber(task),
+      ...taskControlState(task),
+      muted: task.getWxAppMuted?.() ?? false,
       recordingPauseCapable: recordingPauseEnabled(task),
       recordingPaused: recordingPaused(task),
       held: callStatus === 'held',
@@ -623,19 +667,31 @@ export class WebexPocController {
     });
     this.log(`WxCC task hydrated after session recovery (${state || 'active'}).`, 'success');
     reportBackendEvent('cc.task', 'observed', {state: callStatus});
-    if (!wrapup && !terminated) void this.locateCallingCall(task, this.offerGeneration, true);
   }
 
   private attachTaskListeners(task: ITask): void {
     if (this.observedTasks.has(task)) return;
     this.observedTasks.add(task);
 
+    task.on('task:ui-controls-updated', () => {
+      if (this.task === task) this.update(taskControlState(task));
+    });
+    task.on('task:wxapp-mute-state-updated', (event: {muted?: boolean}) => {
+      if (this.task === task && typeof event?.muted === 'boolean') {
+        this.update({muted: event.muted});
+      }
+    });
+
     task.on('task:established', () => {
-      this.update({callStatus: 'connected'});
+      this.update({callStatus: 'connected', ...taskControlState(task)});
       this.log('WxCC task established.', 'success');
     });
-    task.on('task:hold', () => this.update({held: true, callStatus: 'held'}));
-    task.on('task:resume', () => this.update({held: false, callStatus: 'connected'}));
+    task.on('task:hold', () =>
+      this.update({held: true, callStatus: 'held', ...taskControlState(task)}),
+    );
+    task.on('task:resume', () =>
+      this.update({held: false, callStatus: 'connected', ...taskControlState(task)}),
+    );
     task.on('task:recordingPaused', () => this.update({recordingPaused: true}));
     task.on('task:recordingResumed', () => this.update({recordingPaused: false}));
     task.on('task:consultCreated', () => this.update({consultActive: true}));
@@ -675,138 +731,21 @@ export class WebexPocController {
     );
   }
 
-  private async locateCallingCall(
-    task: ITask,
-    generation: number,
-    recovering = false,
-  ): Promise<void> {
-    const delays = [0, 250, 500, 1_000, 1_500, 2_000];
-    const expectedNumber = incomingNumber(task);
-    const offeredAt = Date.now();
-    try {
-      for (const delay of delays) {
-        if (delay) await new Promise((resolve) => window.setTimeout(resolve, delay));
-        if (generation !== this.offerGeneration || this.task !== task) return;
-        const calls = await this.api.listCalls();
-        const result = recovering
-          ? selectRecoverableCall(calls, expectedNumber)
-          : selectIncomingCall(calls, expectedNumber, offeredAt);
-        if (result.kind === 'matched') {
-          this.bindCallingCall(result.call);
-          return;
-        }
-        if (result.kind === 'ambiguous') {
-          this.update({callKind: 'ambiguous'});
-          this.log(
-            `Found ${result.candidates.length} equally plausible active calls; controls remain disabled.`,
-            'warning',
-          );
-          return;
-        }
-      }
-      this.update({callKind: 'none'});
-      this.log(
-        recovering
-          ? 'The Contact Center task was recovered, but no matching active Webex Calling call was found.'
-          : 'No alerting Webex Calling call was found before the lookup deadline.',
-        'warning',
-      );
-    } catch (error) {
-      this.update({callKind: 'none', error: `Calling lookup failed: ${errorMessage(error)}`});
-      this.log(`Calling lookup failed: ${errorMessage(error)}`, 'error');
-    }
-  }
-
-  private bindCallingCall(call: CallingRestCall): void {
-    const id = restCallId(call);
-    this.update({
-      callId: id,
-      callSessionId: call.callSessionId || '',
-      callKind: 'wxcc',
-      callerName: call.remoteParty?.name || 'Unknown caller',
-      callerNumber: call.remoteParty?.number || this.snapshot.callerNumber,
-      callStatus: call.state === 'held' ? 'held' : call.state === 'connected' ? 'connected' : 'ringing',
-      held: call.state === 'held',
-      muted: Boolean(call.muted),
-      muteCapable: Boolean(call.muteCapable),
-      endpointId: call.endpointId || this.snapshot.endpointId,
-    });
-    this.log(`Associated WxCC interaction with Calling callId ${id}.`, 'success');
-    this.startCallPolling();
-  }
-
-  private startCallPolling(): void {
-    this.stopCallPolling();
-    this.callPollTimer = window.setInterval(() => void this.syncCall(), 1_500);
-  }
-
-  private stopCallPolling(): void {
-    if (this.callPollTimer) window.clearInterval(this.callPollTimer);
-    this.callPollTimer = undefined;
-    this.missingCallPolls = 0;
-  }
-
-  private async syncCall(): Promise<void> {
-    if (!this.snapshot.callId) return;
-    try {
-      const call = (await this.api.listCalls()).find(
-        (candidate) => restCallId(candidate) === this.snapshot.callId,
-      );
-      if (!call) {
-        this.missingCallPolls += 1;
-        if (this.missingCallPolls < 2) return;
-        this.stopCallPolling();
-        this.update({
-          ...(this.snapshot.callStatus === 'wrap-up' ? {} : {callStatus: 'ended' as const}),
-          muted: false,
-          held: false,
-        });
-        this.log(
-          this.snapshot.callStatus === 'wrap-up'
-            ? 'Calling call is no longer active; Contact Center wrap-up remains active.'
-            : 'Calling call is no longer active; waiting for the Contact Center task state.',
-        );
-        return;
-      }
-      this.missingCallPolls = 0;
-      const status = this.snapshot.callStatus === 'wrap-up'
-        ? 'wrap-up'
-        : call.state === 'held'
-          ? 'held'
-          : call.state === 'connected' || call.state === 'remoteHeld'
-            ? 'connected'
-            : call.state === 'disconnected'
-              ? 'ended'
-              : call.state === 'alerting'
-                ? 'ringing'
-                : this.snapshot.callStatus;
-      this.update({
-        callStatus: status,
-        held: call.state === 'held',
-        muted: Boolean(call.muted),
-        muteCapable: call.muteCapable ?? this.snapshot.muteCapable,
-        endpointId: call.endpointId || this.snapshot.endpointId,
-      });
-    } catch (error) {
-      this.log(`Call-state refresh failed: ${errorMessage(error)}`, 'warning');
-    }
-  }
-
   private clearCallState(): void {
-    this.stopCallPolling();
-    this.offerGeneration += 1;
     this.task = undefined;
     this.update({
       callStatus: 'none',
       interactionId: '',
-      callId: '',
-      callSessionId: '',
-      callKind: 'none',
       callerName: '',
       callerNumber: '',
+      acceptCapable: false,
+      declineCapable: false,
+      holdCapable: false,
+      endCapable: false,
       muted: false,
       held: false,
       muteCapable: false,
+      dtmfCapable: false,
       recordingPaused: false,
       recordingPauseCapable: false,
       consultActive: false,

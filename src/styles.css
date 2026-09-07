@@ -128,11 +128,10 @@ input:focus { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf20; }
 .association { margin: 12px 0; border-radius: 8px; padding: 9px 11px; color: light-dark(#315c78, #a5d8fa); background: light-dark(#eaf4fd, #173248); font-size: 12px; }
 .call-card .association { flex: 0 0 auto; margin: 0; border-radius: 999px; padding: 6px 9px; font-size: 10px; font-weight: 720; }
 .association-wxcc { color: light-dark(#18743b, #8be0ac); background: light-dark(#e4f7eb, #173c29); }
-.association-ambiguous { color: light-dark(#8b5c00, #f1ce78); background: light-dark(#fff4d9, #3b3017); }
 .call-metadata { margin: -2px 0 14px; border-bottom: 1px solid light-dark(#e1e7ec, #303d47); }
 .call-metadata summary { width: fit-content; padding: 8px 2px; color: light-dark(#6b7b86, #9eacb6); cursor: pointer; font-size: 10px; font-weight: 720; }
 .call-metadata .id-grid { margin: 3px 0 12px; }
-.id-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.id-grid { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 14px; }
 .id-grid div { min-width: 0; border-radius: 9px; padding: 9px; background: light-dark(#f1f5f7, #111820); }
 .id-grid span { display: block; color: light-dark(#71808a, #91a0ab); font-size: 10px; margin-bottom: 5px; }
 .id-grid code { display: block; color: light-dark(#245e89, #9dd5f7); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }

@@ -349,15 +349,6 @@ app.post('/api/oauth/logout', requireSameOrigin, (request, response) => {
   response.status(204).end();
 });
 
-app.get('/api/calling/calls', requireSession, async (request, response) => {
-  try {
-    response.setHeader('Cache-Control', 'no-store');
-    response.json(await webexRequest(request.webexSession.value, '/telephony/calls'));
-  } catch (error) {
-    sendApiError(response, error, request, 'calling.calls_list');
-  }
-});
-
 app.get('/api/calling/station-configuration', requireSession, async (request, response) => {
   try {
     response.setHeader('Cache-Control', 'no-store');
@@ -425,73 +416,12 @@ app.put(
   },
 );
 
-const callActions = new Set([
-  'answer',
-  'hangup',
-  'hold',
-  'resume',
-  'mute',
-  'unmute',
-  'transmitDtmf',
-]);
-
-app.post(
-  '/api/calling/actions/:action',
-  requireSameOrigin,
-  requireSession,
-  async (request, response) => {
-    const action = request.params.action;
-    const {callId, endpointId, dtmf} = request.body || {};
-    if (!callActions.has(action) || typeof callId !== 'string' || !callId) {
-      response.status(400).json({message: 'A supported action and callId are required.'});
-      return;
-    }
-    if (action === 'transmitDtmf' && (typeof dtmf !== 'string' || !/^[0-9*#A-D,]+$/.test(dtmf))) {
-      response.status(400).json({message: 'A valid DTMF sequence is required.'});
-      return;
-    }
-    const payload = {callId};
-    if (action === 'answer' && endpointId) payload.endpointId = endpointId;
-    if (action === 'transmitDtmf') payload.dtmf = dtmf;
-    const startedAt = Date.now();
-    logServer('info', 'calling.call_control', request, {
-      outcome: 'started',
-      action,
-      hasAnswerEndpoint: action === 'answer' && Boolean(endpointId),
-    });
-    try {
-      const result = await webexRequest(request.webexSession.value, `/telephony/calls/${action}`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-      response.status(result === null ? 204 : 200);
-      if (result === null) response.end();
-      else response.json(result);
-      logServer('info', 'calling.call_control', request, {
-        outcome: 'succeeded',
-        action,
-        durationMs: Date.now() - startedAt,
-      });
-    } catch (error) {
-      logServer('error', 'calling.call_control', request, {
-        outcome: 'failed',
-        action,
-        durationMs: Date.now() - startedAt,
-        ...safeErrorFields(error),
-      });
-      response.status(error.status || 502).json({
-        message: error.message || 'Webex API request failed.',
-        details: error.payload,
-      });
-    }
-  },
-);
-
 const diagnosticEvents = new Set([
   'cc.initialize',
   'cc.station_login',
   'cc.agent_state',
   'cc.task',
+  'cc.webex_call_control',
   'cc.recording',
   'cc.consult',
   'cc.transfer',
@@ -521,7 +451,7 @@ app.post('/api/diagnostics/events', requireSameOrigin, requireSession, (request,
     safeDetails.taskCount = details.taskCount;
   }
   if (diagnosticStates.has(details.state)) safeDetails.state = details.state;
-  if (['pause', 'resume', 'start', 'exit'].includes(details.action)) {
+  if (['pause', 'resume', 'start', 'exit', 'accept', 'decline', 'mute', 'unmute', 'dtmf', 'hold', 'end'].includes(details.action)) {
     safeDetails.action = details.action;
   }
   if (['agent', 'queue'].includes(details.destinationType)) {

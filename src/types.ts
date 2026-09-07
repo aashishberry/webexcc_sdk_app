@@ -50,14 +50,16 @@ export interface ControllerSnapshot {
   extension: string;
   lineStatus: string;
   interactionId: string;
-  callId: string;
-  callSessionId: string;
-  callKind: 'none' | 'wxcc' | 'ambiguous' | 'locating';
   callerName: string;
   callerNumber: string;
+  acceptCapable: boolean;
+  declineCapable: boolean;
+  holdCapable: boolean;
+  endCapable: boolean;
   muted: boolean;
   held: boolean;
   muteCapable: boolean;
+  dtmfCapable: boolean;
   recordingPaused: boolean;
   recordingPauseCapable: boolean;
   consultActive: boolean;
@@ -97,14 +99,16 @@ export const initialSnapshot: ControllerSnapshot = {
   extension: '',
   lineStatus: 'Not checked',
   interactionId: '',
-  callId: '',
-  callSessionId: '',
-  callKind: 'none',
   callerName: '',
   callerNumber: '',
+  acceptCapable: false,
+  declineCapable: false,
+  holdCapable: false,
+  endCapable: false,
   muted: false,
   held: false,
   muteCapable: false,
+  dtmfCapable: false,
   recordingPaused: false,
   recordingPauseCapable: false,
   consultActive: false,
