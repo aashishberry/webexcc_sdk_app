@@ -356,7 +356,12 @@ export function App() {
       ? `idle:${snapshot.selectedIdleCode}`
       : 'idle';
   const stateElapsed = clock && snapshot.stateChangedAt ? formatElapsed(clock - snapshot.stateChangedAt) : '0:00';
-  const callElapsed = clock && snapshot.callStartedAt ? formatElapsed(clock - snapshot.callStartedAt) : '0:00';
+  const callElapsed = clock && snapshot.callStartedAt
+    ? formatElapsed((snapshot.callEndedAt || clock) - snapshot.callStartedAt)
+    : '0:00';
+  const wrapupElapsed = clock && snapshot.wrapupStartedAt
+    ? formatElapsed(clock - snapshot.wrapupStartedAt)
+    : '0:00';
   const displayParticipants = snapshot.participants.length
     ? snapshot.participants
     : [
@@ -838,10 +843,23 @@ export function App() {
                   </h2>
                 </div>
                 {activeInteraction ? (
-                  <div className="interaction-timer">
-                    <time>{callElapsed}</time>
-                    <span>{wrapupActive ? 'Wrap-up time' : snapshot.callStatus}</span>
-                  </div>
+                  wrapupActive ? (
+                    <div className="interaction-timers" aria-label="Interaction timing">
+                      <div className="interaction-timer call-duration-timer">
+                        <time>{callElapsed}</time>
+                        <span>Call duration</span>
+                      </div>
+                      <div className="interaction-timer wrapup-timer">
+                        <time>{wrapupElapsed}</time>
+                        <span>Wrap-up</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="interaction-timer">
+                      <time>{callElapsed}</time>
+                      <span>{snapshot.callStatus}</span>
+                    </div>
+                  )
                 ) : (
                   <span className="station-health"><i />{snapshot.lineStatus}</span>
                 )}

@@ -87,6 +87,16 @@ export interface AgentPerformanceSummary {
 
 export type PerformanceStatus = 'idle' | 'loading' | 'ready' | 'unavailable' | 'error';
 
+export type TranscriptionStatus =
+  | 'idle'
+  | 'waiting'
+  | 'starting'
+  | 'requested'
+  | 'active'
+  | 'stopped'
+  | 'unavailable'
+  | 'error';
+
 export interface ControllerSnapshot {
   lifecycle: LifecycleStatus;
   callStatus: CallStatus;
@@ -102,6 +112,8 @@ export interface ControllerSnapshot {
   lineStatus: string;
   interactionId: string;
   callStartedAt: number;
+  callEndedAt: number;
+  wrapupStartedAt: number;
   callerName: string;
   callerNumber: string;
   interactionContext: InteractionContext;
@@ -137,6 +149,9 @@ export interface ControllerSnapshot {
   idleCodes: Profile['idleCodes'];
   selectedIdleCode: string;
   transcripts: TranscriptEntry[];
+  realtimeTranscriptionEnabled: boolean;
+  transcriptionStatus: TranscriptionStatus;
+  transcriptionMessage: string;
   aiSuggestions: AiSuggestion[];
   aiAssistanceLoading: boolean;
   aiSummaryLoading: boolean;
@@ -182,6 +197,8 @@ export const initialSnapshot: ControllerSnapshot = {
   lineStatus: 'Not checked',
   interactionId: '',
   callStartedAt: 0,
+  callEndedAt: 0,
+  wrapupStartedAt: 0,
   callerName: '',
   callerNumber: '',
   interactionContext: {
@@ -223,6 +240,9 @@ export const initialSnapshot: ControllerSnapshot = {
   idleCodes: [],
   selectedIdleCode: '',
   transcripts: [],
+  realtimeTranscriptionEnabled: false,
+  transcriptionStatus: 'idle',
+  transcriptionMessage: '',
   aiSuggestions: [],
   aiAssistanceLoading: false,
   aiSummaryLoading: false,

@@ -57,9 +57,25 @@ function ContextView({snapshot}: {snapshot: ControllerSnapshot}) {
   );
 }
 
-function TranscriptView({snapshot}: {snapshot: ControllerSnapshot}) {
+function TranscriptView({snapshot, controller, busy, run}: InteractionInsightsProps) {
+  const canRetry =
+    snapshot.realtimeTranscriptionEnabled &&
+    ['connected', 'held'].includes(snapshot.callStatus) &&
+    ['waiting', 'error', 'stopped'].includes(snapshot.transcriptionStatus);
+  const statusMessage = snapshot.transcriptionMessage || (
+    snapshot.transcriptionStatus === 'starting'
+      ? 'Starting transcript streaming…'
+      : snapshot.transcriptionStatus === 'active'
+        ? 'Live transcript streaming is active.'
+        : 'Waiting for transcript audio.'
+  );
+
   return (
     <div className="insight-content transcript-list" aria-live="polite">
+      <div className={`transcription-status status-${snapshot.transcriptionStatus}`}>
+        <span aria-hidden="true" />
+        <p>{statusMessage}</p>
+      </div>
       {snapshot.transcripts.length ? snapshot.transcripts.map((entry) => (
         <article className={`transcript-entry role-${entry.role.toLowerCase()}`} key={entry.id}>
           <div>
@@ -71,7 +87,17 @@ function TranscriptView({snapshot}: {snapshot: ControllerSnapshot}) {
       )) : (
         <div className="insight-empty">
           <strong>No transcript yet</strong>
-          <span>Live transcript entries appear here when the feature is enabled for this agent.</span>
+          <span>Transcript entries appear here after streaming starts and speech is detected.</span>
+          {canRetry && (
+            <button
+              type="button"
+              className="button secondary"
+              disabled={busy !== '' || snapshot.transcriptionStatus === 'starting'}
+              onClick={() => void run('ai-transcript', () => controller.startTranscription())}
+            >
+              Retry transcript
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -182,7 +208,7 @@ export function InteractionInsights(props: InteractionInsightsProps) {
         ))}
       </div>
       {tab === 'context' && <ContextView snapshot={snapshot} />}
-      {tab === 'transcript' && <TranscriptView snapshot={snapshot} />}
+      {tab === 'transcript' && <TranscriptView {...props} />}
       {tab === 'assist' && <AssistanceView {...props} />}
       {tab === 'summary' && <SummaryView {...props} />}
     </aside>

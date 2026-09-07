@@ -234,7 +234,82 @@ describe('WebexPocController task completion', () => {
     await controller.endCall();
 
     expect(task.end).toHaveBeenCalledOnce();
-    expect(controller.getSnapshot().callStatus).toBe('wrap-up');
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'wrap-up',
+      callEndedAt: expect.any(Number),
+      wrapupStartedAt: expect.any(Number),
+    });
+    expect(controller.getSnapshot().callEndedAt).toBeGreaterThan(0);
+    expect(controller.getSnapshot().wrapupStartedAt).toBeGreaterThan(0);
+  });
+});
+
+describe('WebexPocController transcription', () => {
+  it('explicitly starts transcript streaming when an enabled task is assigned', async () => {
+    const controller = new WebexPocController();
+    const task = fakeTask(false);
+    const sendEvent = vi.fn(async () => ({}));
+    const internal = controller as unknown as {
+      cc: {apiAIAssistant: {sendEvent: typeof sendEvent}};
+      profile: Profile;
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.cc = {apiAIAssistant: {sendEvent}};
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    internal.task = task;
+    internal.update({
+      realtimeTranscriptionEnabled: true,
+      transcriptionStatus: 'waiting',
+    });
+    observeTask(controller, task);
+
+    task.emitTest('task:assigned');
+
+    await vi.waitFor(() => expect(sendEvent).toHaveBeenCalledWith(
+      'agent-1',
+      'interaction-1',
+      'CUSTOM_EVENT',
+      'GET_TRANSCRIPTS',
+      {action: 'START'},
+      'en',
+    ));
+    expect(controller.getSnapshot()).toMatchObject({
+      transcriptionStatus: 'requested',
+      transcriptionMessage: expect.stringContaining('Waiting for the first utterance'),
+    });
+
+    task.emitTest('task:end');
+
+    await vi.waitFor(() => expect(sendEvent).toHaveBeenCalledWith(
+      'agent-1',
+      'interaction-1',
+      'CUSTOM_EVENT',
+      'GET_TRANSCRIPTS',
+      {action: 'STOP'},
+      'en',
+    ));
+  });
+
+  it('does not start streaming when the registered profile disables transcription', async () => {
+    const controller = new WebexPocController();
+    const task = fakeTask(false);
+    const sendEvent = vi.fn(async () => ({}));
+    const internal = controller as unknown as {
+      cc: {apiAIAssistant: {sendEvent: typeof sendEvent}};
+      profile: Profile;
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.cc = {apiAIAssistant: {sendEvent}};
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    internal.task = task;
+    internal.update({realtimeTranscriptionEnabled: false});
+
+    await expect(controller.startTranscription()).rejects.toThrow('not enabled');
+
+    expect(sendEvent).not.toHaveBeenCalled();
+    expect(controller.getSnapshot().transcriptionStatus).toBe('unavailable');
   });
 });
 

@@ -50,8 +50,8 @@ The Contact Center SDK connects directly from the browser to Webex services, rou
 | Component | Responsibilities |
 |---|---|
 | `App.tsx` | Workflow composition, profile-driven station-mode selection, WebRTC permission and remote-audio binding, responsive lifecycle stage, persistent state control, call-control dock, consult/conference views, banners, theme, alerts, and diagnostics drawer |
-| `InteractionInsights.tsx` | Interaction context, historic/live transcript presentation, real-time AI assistance and feedback, and mid-call/post-call summary presentation |
-| `WebexPocController.ts` | Contact Center lifecycle, three-mode station login, native task controls, browser media events, interaction context and participant normalization, AI Assistant events, optional performance loading, task state machine, and action coordination |
+| `InteractionInsights.tsx` | Interaction context, transcript lifecycle status and retry, historic/live transcript presentation, real-time AI assistance and feedback, and mid-call/post-call summary presentation |
+| `WebexPocController.ts` | Contact Center lifecycle, three-mode station login, native task controls, browser media events, interaction context and participant normalization, transcript START/STOP coordination, AI Assistant events, optional performance loading, task state machine, and action coordination |
 | `server.mjs` | OAuth, token refresh, HTTP-only session cookie, Calling configuration proxy, GraphQL Search proxy, diagnostics ingestion, static hosting |
 | `callingApi.ts` | Typed same-origin client for server routes |
 | `stationConfiguration.ts` | Extension and endpoint normalization and selection policy |
@@ -210,6 +210,8 @@ sequenceDiagram
     SDK-->>UI: Task result and UI-control updates
     W-->>SDK: task:assigned
     SDK-->>UI: Connected task state
+    UI->>SDK: GET_TRANSCRIPTS START when profile-enabled
+    SDK-->>UI: REAL_TIME_TRANSCRIPTION events
     UI->>SDK: task.hold() or task.resume()
     SDK->>W: Contact Center AQM hold or unhold
     W-->>SDK: task:hold or task:resume
@@ -234,6 +236,8 @@ The UI treats the SDK task as the single source of truth for the active interact
 - `task:media` supplies the remote audio track for browser WebRTC calls.
 - `task:end`, `task:wrapup`, and `task:wrappedup` determine completion and cleanup.
 - `task:hydrate` restores the task and controls after refresh.
+
+Real-time transcription is a profile-gated companion lifecycle. After assignment, the controller sends an explicit `GET_TRANSCRIPTS` START request through `cc.apiAIAssistant.sendEvent()`. This is a compatibility fallback for task sequences in which the SDK receives a media-fork update but does not issue its automatic start request. Application-originated starts are deduplicated by interaction ID and paired with STOP on task end or wrap-up. The first transcript event establishes the active state; request failures stay within `transcriptionStatus` and do not change call state.
 
 The application no longer lists active Calling calls, matches `interactionId` to `callId`, or polls `/telephony/calls`.
 
@@ -393,13 +397,22 @@ conferenceActive
 
 `task:consultCreated`, `task:consulting`, and `task:consultEnd` update consultation state. `task:conferenceStarted` and `task:conferenceEnded` update conference state. During refresh hydration, `isConsulted`, `isConferencing`, and `isConferenceInProgress` restore these modes.
 
+Call and wrap-up timing use separate controller fields:
+
+```text
+callStartedAt -> callEndedAt       frozen call duration
+wrapupStartedAt -> current clock   elapsed wrap-up time
+```
+
+The wrap-up event uses the current agent participant's `wrapUpTimestamp` when available and falls back to the local observation time. Hydrated wrap-up tasks use the same timestamp extraction, preventing the call clock from continuing during after-call work.
+
 ## 11. Responsive UI state
 
 Desktop and mobile use the same React component tree, controller snapshot, and action handlers. CSS breakpoints reflow the top bar, station-mode cards, station details, state selector, call-control grid, consult actions, conference controls, and participant rows; there is no separate mobile application or duplicate SDK session.
 
 Station setup deliberately has two progressive views rather than a persistent stepper. OAuth completion leads to one Contact Center connection action. After registration, the UI displays three recognizable connection cards and only the fields relevant to the selected mode. Unsupported profile modes remain visible but disabled so agents understand that the capability is controlled by their assigned profile rather than missing from the application.
 
-The top bar contains a persistent agent-state selector and time-in-state display. It remains available for connected and held interactions, including consult and conference modes, and is disabled while ringing, answering, wrapping up, or executing another action. Selecting a value invokes the normal Contact Center agent-state API; Webex Contact Center remains authoritative for the resulting agent-state event.
+The top bar contains a persistent agent-state selector and time-in-state display. It remains available for connected and held interactions, including consult and conference modes, and is disabled while ringing, answering, wrapping up, or executing another action. Selecting a value invokes the normal Contact Center agent-state API; Webex Contact Center remains authoritative for the resulting agent-state event. During wrap-up, the interaction header retains the frozen call duration and displays a separate after-call-work timer.
 
 The active interaction uses a two-column desktop layout: the call lifecycle and stable control dock are the primary stage, while Context, Transcript, Assist, and Summary occupy a companion panel. At tablet and mobile breakpoints the same components stack vertically. There is no separate mobile application, SDK instance, or navigation rail.
 
@@ -497,6 +510,8 @@ Conference start and exit report the allowlisted `cc.conference` diagnostic even
 | Station login failure | Existing configuration remains available for retry |
 | Reporting role missing | Performance cards show an unavailable state; station and task workflows continue |
 | Reporting query or regional service failure | Reporting exposes a retry action without changing lifecycle or call state |
+| Transcript feature disabled in profile | Transcript tab reports the profile capability and sends no START request |
+| Transcript START failure | Transcript tab retains a retry action; call handling continues unchanged |
 | SDK task control failure | State is preserved or restored, an application banner is shown, and a non-PII diagnostic is reported |
 | Declined offer | `task.decline()` rejects the Webex App call and the local task view clears after SDK success |
 | Conference start failure | Consultation remains visible and the error is presented in the application banner |

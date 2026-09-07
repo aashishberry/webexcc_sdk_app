@@ -27,7 +27,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, st
 | Native voice controls | Contact Center task capabilities and methods drive answer, decline, hold, resume, mute, unmute, DTMF, and end without browser call-ID matching or polling |
 | Contact Center controls | Pause/resume recording, consult, transfer, consult transfer, consult end, consult conference, conference exit, and wrap-up |
 | Consult and conference orchestration | SDK capability-gated call-leg switching, consult completion, conference handoff, and participant removal using authoritative participant IDs when supplied |
-| Agent assistance | Live and recovered transcripts, real-time assistance requests and feedback, and mid-call/post-call summary requests through `apiAIAssistant` |
+| Agent assistance | Explicit transcript start/stop lifecycle, live and recovered transcripts, real-time assistance requests and feedback, and mid-call/post-call summary requests through `apiAIAssistant` |
 | Agent performance | Current-day completed interactions, average connected time, average hold time, and average wrap-up time through GraphQL Search |
 | Endpoint preference | Optional persistence of the selected Webex Calling answer endpoint |
 | Refresh recovery | SDK automated relogin, station-state restoration, and task hydration |
@@ -162,7 +162,7 @@ npm start
 | Conference handoff | Contact Center SDK task | `transferConference()`, gated by the active task UI control |
 | Conference exit | Contact Center SDK task | `exitConference()` removes the current agent and leaves the other conference parties connected |
 | Wrap-up | Contact Center SDK task | Uses configured wrap-up codes after the task enters wrap-up |
-| Transcript and AI assistance | Contact Center SDK AI Assistant | Historic and live transcripts, suggested responses, user-action feedback, and summary requests remain interaction-scoped |
+| Transcript and AI assistance | Contact Center SDK AI Assistant | Profile-gated `GET_TRANSCRIPTS` START/STOP requests, historic and live transcripts, suggested responses, user-action feedback, and summary requests remain interaction-scoped |
 
 Conference rows are reconstructed only while the SDK participant map is unavailable. Reconstructed rows cannot be removed. As soon as task data supplies authoritative participant IDs, the console enables participant removal for non-host participants and delegates the action to `task.dropConferenceParticipant()`.
 
@@ -176,6 +176,10 @@ The active interaction opens a companion panel with four views:
 - Summary: mid-call and post-call requests through the AI Assistant event API.
 
 The UI renders empty states when the tenant, agent profile, or interaction does not enable an AI or reporting capability. It does not invent transcript, summary, queue, or performance values.
+
+When `profile.aiFeature.realtimeTranscripts.enable` is true, the console explicitly sends `GET_TRANSCRIPTS` with `action: START` after `task:assigned`. This supplements the SDK's automatic transcript lifecycle and covers task sequences where the later media-fork update does not cause the SDK to issue the start request. The application deduplicates its own start request per interaction, reports request status in the Transcript tab, and exposes a retry after a failed request. The first `REAL_TIME_TRANSCRIPTION` event moves the presentation from requested to active. On task end or wrap-up, an application-started stream is paired with `action: STOP`.
+
+The transcript path remains profile-gated. If the SDK registration profile does not advertise real-time transcription, the UI states that explicitly and does not send an unsupported request. See the [Webex Contact Center task transcription contract](https://developer.webex.com/webex-contact-center/docs/sdks/webex-contact-center-web-sdk-tasks#real-time-transcriptions).
 
 After Contact Center registration, the controller resolves the SDK-discovered regional `wcc-api-gateway` and asks the same-origin server for current-day performance. The server validates the regional Webex hostname and time window, refreshes the OAuth token when necessary, and posts a `taskDetails` aggregation to `/search`. The query uses `endedTime`, telephony media, and the registered profile's `agentId` to return:
 
@@ -258,6 +262,8 @@ await task.end();
 
 The SDK decides how to route these operations from the task's agent participant metadata and state machine. Answer, decline, mute, and DTMF use the Webex App Better Together path. Hold, resume, and end use Contact Center AQM task operations. The application binds action availability to `task.uiControls` and listens for task lifecycle events instead of inferring state from a Calling REST call ID.
 
+The interaction header maintains separate timestamps for media and after-call work. `callEndedAt` freezes the displayed call duration when the task enters wrap-up. `wrapupStartedAt` uses the current agent participant's `wrapUpTimestamp` when present, otherwise the observed task event time. Wrap-up therefore starts at `0:00` independently while the completed call duration remains visible.
+
 The selected endpoint is still useful as the user's Webex Calling preference before station login. It is not passed to `task.accept()`; the SDK uses the Webex App device identifiers carried by the offered Contact Center task.
 
 Upstream references:
@@ -314,7 +320,7 @@ The server emits one-line JSON records suitable for Render log streams. Covered 
 - OAuth authorization, callback, status, and logout
 - Calling profile and station-configuration discovery
 - GraphQL agent-performance success or availability outcome
-- Contact Center initialization, station login, state, task, recording, consult, conference, transfer, wrap-up, and logout
+- Contact Center initialization, station login, state, task, recording, transcript lifecycle, consult, conference, transfer, wrap-up, and logout
 - SDK task answer, decline, hold, resume, mute, unmute, DTMF, and end outcomes reported through allowlisted non-PII diagnostics
 
 Contact Center SDK actions occur directly in the browser. The browser reports allowlisted lifecycle milestones to `POST /api/diagnostics/events`. The server accepts only known events, outcomes, and fields.
@@ -381,7 +387,7 @@ npm run lint
 npm run build
 ```
 
-The test suite covers team normalization, station configuration, custom selectors, native SDK call controls and mute synchronization, call-control state, wrap-up behavior, idle reasons, refresh recovery, and reporting state isolation.
+The test suite covers team normalization, station configuration, custom selectors, native SDK call controls and mute synchronization, call-control state, transcript START/STOP behavior, independent wrap-up timing, idle reasons, refresh recovery, and reporting state isolation.
 
 ## Source layout
 

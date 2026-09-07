@@ -200,6 +200,26 @@ function recordingPaused(task: ITask): boolean {
   return value === true || value === 'true' || value === 'TRUE';
 }
 
+function epochMilliseconds(value: unknown): number {
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return 0;
+  return timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
+}
+
+function taskWrapupStartedAt(task: ITask, agentId = ''): number {
+  const data = task.data as unknown as Record<string, any>;
+  const participants = Object.entries(data.interaction?.participants ?? {}) as Array<
+    [string, Record<string, any>]
+  >;
+  const currentAgent = participants.find(([id, participant]) =>
+    id === agentId ||
+    participant.id === agentId ||
+    participant.participantId === agentId ||
+    participant.agentId === agentId,
+  )?.[1];
+  return epochMilliseconds(currentAgent?.wrapUpTimestamp);
+}
+
 function taskControlState(task: ITask) {
   const main = task.uiControls?.main;
   const activeLeg = task.uiControls?.activeLeg ?? 'main';
@@ -245,6 +265,7 @@ export class WebexPocController {
   private task?: ITask;
   private logSequence = 0;
   private observedTasks = new WeakSet<ITask>();
+  private applicationTranscriptRequests = new Set<string>();
 
   subscribe(listener: SnapshotListener): () => void {
     this.listeners.add(listener);
@@ -349,6 +370,7 @@ export class WebexPocController {
         stationDialNumber: recovered.dialNumber,
         loginVoiceOptions,
         webRtcEnabled: profile.webRtcEnabled === true,
+        realtimeTranscriptionEnabled: profile.aiFeature?.realtimeTranscripts?.enable === true,
         lineStatus: recovered.loggedIn ? 'Station connected' : 'Ready for station login',
       });
       this.log(`Contact Center registered for ${profile.agentName}.`, 'success');
@@ -668,6 +690,57 @@ export class WebexPocController {
     }
   }
 
+  async startTranscription(): Promise<void> {
+    if (!this.cc?.apiAIAssistant || !this.task || !this.profile) {
+      throw new Error('A connected Contact Center interaction is required to start transcription.');
+    }
+    if (!this.snapshot.realtimeTranscriptionEnabled) {
+      this.update({
+        transcriptionStatus: 'unavailable',
+        transcriptionMessage: 'Real-time transcription is not enabled in this agent profile.',
+      });
+      throw new Error('Real-time transcription is not enabled in this agent profile.');
+    }
+
+    const interactionId = this.task.data.interactionId;
+    if (this.applicationTranscriptRequests.has(interactionId)) return;
+    this.applicationTranscriptRequests.add(interactionId);
+    this.update({transcriptionStatus: 'starting', transcriptionMessage: ''});
+    reportBackendEvent('cc.ai_transcript', 'started', {action: 'start'});
+    try {
+      await this.cc.apiAIAssistant.sendEvent(
+        this.profile.agentId,
+        interactionId,
+        'CUSTOM_EVENT',
+        'GET_TRANSCRIPTS',
+        {action: 'START'},
+        'en',
+      );
+      if (
+        this.task?.data.interactionId === interactionId &&
+        this.applicationTranscriptRequests.has(interactionId)
+      ) {
+        this.update({
+          transcriptionStatus: 'requested',
+          transcriptionMessage: 'Transcript streaming was requested. Waiting for the first utterance.',
+        });
+      }
+      this.log('Real-time transcript streaming requested.', 'success');
+      reportBackendEvent('cc.ai_transcript', 'succeeded', {action: 'start'});
+    } catch (error) {
+      this.applicationTranscriptRequests.delete(interactionId);
+      if (this.task?.data.interactionId === interactionId) {
+        this.update({
+          transcriptionStatus: 'error',
+          transcriptionMessage: `Transcript streaming could not be started: ${errorMessage(error)}`,
+        });
+      }
+      this.log('Real-time transcript streaming request failed.', 'warning');
+      reportBackendEvent('cc.ai_transcript', 'failed', {action: 'start'});
+      throw error;
+    }
+  }
+
   async requestAssistance(context = ''): Promise<void> {
     if (!this.cc?.apiAIAssistant || !this.task || !this.profile) {
       throw new Error('AI assistance is not available for the active interaction.');
@@ -941,12 +1014,14 @@ export class WebexPocController {
 
   async wrapup(): Promise<void> {
     if (!this.task) throw new Error('No Contact Center task is available for wrap-up.');
+    const task = this.task;
     const code = this.profile?.wrapupCodes.find(
       (candidate) => candidate.id === this.snapshot.selectedWrapupCode,
     );
     if (!code) throw new Error('Select a wrap-up code.');
     try {
-      await this.task.wrapup({wrapUpReason: code.name, auxCodeId: code.id});
+      await task.wrapup({wrapUpReason: code.name, auxCodeId: code.id});
+      this.stopTranscription(task);
       this.log(`Wrap-up submitted: ${code.name}.`, 'success');
       reportBackendEvent('cc.wrapup', 'succeeded');
       this.clearCallState();
@@ -975,6 +1050,7 @@ export class WebexPocController {
       this.cc = undefined;
       this.profile = undefined;
       this.task = undefined;
+      this.applicationTranscriptRequests.clear();
       this.snapshot = {...structuredClone(initialSnapshot), timeline: this.snapshot.timeline};
       this.log('Contact Center station and SDK session cleared.', 'success');
       this.setLifecycle('signed-out', 'Signed out');
@@ -1010,6 +1086,8 @@ export class WebexPocController {
         activeTask: task,
         interactionId,
         callStartedAt: interactionContext(task).offeredAt || Date.now(),
+        callEndedAt: 0,
+        wrapupStartedAt: 0,
         callStatus: 'ringing',
         callerName: incomingName(task),
         callerNumber: incomingNumber(task),
@@ -1025,6 +1103,10 @@ export class WebexPocController {
         destinations: [],
         destinationsLoaded: false,
         transcripts: [],
+        transcriptionStatus: this.snapshot.realtimeTranscriptionEnabled ? 'waiting' : 'unavailable',
+        transcriptionMessage: this.snapshot.realtimeTranscriptionEnabled
+          ? 'Transcript streaming will start when the interaction connects.'
+          : 'Real-time transcription is not enabled in this agent profile.',
         aiSuggestions: [],
         aiAssistanceLoading: false,
         aiSummaryLoading: false,
@@ -1059,11 +1141,14 @@ export class WebexPocController {
           : state.includes('hold')
             ? 'held'
             : 'connected';
+    const wrapupStartedAt = wrapup ? taskWrapupStartedAt(task, this.profile?.agentId) || Date.now() : 0;
 
     this.update({
       activeTask: task,
       interactionId: task.data.interactionId,
       callStartedAt: interactionContext(task).offeredAt || Date.now(),
+      callEndedAt: terminated ? wrapupStartedAt || Date.now() : 0,
+      wrapupStartedAt,
       callStatus,
       callerName: incomingName(task),
       callerNumber: incomingNumber(task),
@@ -1076,12 +1161,23 @@ export class WebexPocController {
       held: callStatus === 'held',
       consultActive: Boolean(data.isConsulted) && !(data.isConferencing || data.isConferenceInProgress),
       conferenceActive: Boolean(data.isConferencing || data.isConferenceInProgress),
+      transcriptionStatus: terminated
+        ? 'stopped'
+        : this.snapshot.realtimeTranscriptionEnabled
+          ? 'waiting'
+          : 'unavailable',
+      transcriptionMessage: this.snapshot.realtimeTranscriptionEnabled
+        ? ''
+        : 'Real-time transcription is not enabled in this agent profile.',
       remoteAudioTrack: undefined,
       error: '',
     });
     this.log(`WxCC task hydrated after session recovery (${state || 'active'}).`, 'success');
     reportBackendEvent('cc.task', 'observed', {state: callStatus});
     void this.restoreHistoricTranscripts(task);
+    if (callStatus === 'connected' || callStatus === 'held') {
+      void this.startTranscription().catch(() => undefined);
+    }
   }
 
   private attachTaskListeners(task: ITask): void {
@@ -1110,8 +1206,10 @@ export class WebexPocController {
     });
 
     task.on('task:assigned', () => {
+      if (this.task !== task) return;
       this.update({callStatus: 'connected', ...taskControlState(task)});
       this.log('WxCC task assigned and connected.', 'success');
+      void this.startTranscription().catch(() => undefined);
     });
     task.on('task:hold', () =>
       this.update({held: true, callStatus: 'held', ...taskControlState(task)}),
@@ -1140,7 +1238,11 @@ export class WebexPocController {
       const existingIndex = transcripts.findIndex((candidate) => candidate.id === entry.id);
       if (existingIndex >= 0) transcripts[existingIndex] = entry;
       else transcripts.push(entry);
-      this.update({transcripts: transcripts.slice(-200)});
+      this.update({
+        transcripts: transcripts.slice(-200),
+        transcriptionStatus: 'active',
+        transcriptionMessage: '',
+      });
     });
     task.on('SUGGESTED_RESPONSE', (payload: unknown) => {
       if (this.task !== task) return;
@@ -1164,19 +1266,33 @@ export class WebexPocController {
       if (summary) this.update({postCallSummary: summary, aiSummaryLoading: false, aiError: ''});
     });
     task.on('task:wrapup', () => {
-      this.update({callStatus: 'wrap-up'});
+      const startedAt = taskWrapupStartedAt(task, this.profile?.agentId) || Date.now();
+      this.stopTranscription(task);
+      this.update({
+        callStatus: 'wrap-up',
+        callEndedAt: this.snapshot.callEndedAt || startedAt,
+        wrapupStartedAt: this.snapshot.wrapupStartedAt || startedAt,
+      });
       this.log('WxCC task entered wrap-up.');
     });
     task.on('task:wrappedup', () => {
+      this.stopTranscription(task);
       this.log('WxCC task wrap-up completed.', 'success');
       this.clearCallState();
     });
     task.on('task:end', (endedTask?: ITask) => {
       const currentTask = endedTask ?? task;
       this.task = currentTask;
+      const endedAt = taskWrapupStartedAt(currentTask, this.profile?.agentId) || Date.now();
+      this.stopTranscription(currentTask);
 
       if (currentTask.data.wrapUpRequired) {
-        this.update({activeTask: currentTask, callStatus: 'wrap-up'});
+        this.update({
+          activeTask: currentTask,
+          callStatus: 'wrap-up',
+          callEndedAt: this.snapshot.callEndedAt || endedAt,
+          wrapupStartedAt: this.snapshot.wrapupStartedAt || endedAt,
+        });
         this.log('WxCC task ended; waiting for wrap-up.');
         void this.requestSummary('post-call').catch(() => undefined);
         return;
@@ -1214,12 +1330,42 @@ export class WebexPocController {
     }
   }
 
+  private stopTranscription(task: ITask): void {
+    const interactionId = task.data.interactionId;
+    if (!this.applicationTranscriptRequests.delete(interactionId)) return;
+    if (!this.cc?.apiAIAssistant || !this.profile) return;
+
+    reportBackendEvent('cc.ai_transcript', 'started', {action: 'stop'});
+    void this.cc.apiAIAssistant
+      .sendEvent(
+        this.profile.agentId,
+        interactionId,
+        'CUSTOM_EVENT',
+        'GET_TRANSCRIPTS',
+        {action: 'STOP'},
+        'en',
+      )
+      .then(() => {
+        if (this.task?.data.interactionId === interactionId) {
+          this.update({transcriptionStatus: 'stopped', transcriptionMessage: ''});
+        }
+        this.log('Real-time transcript streaming stopped.');
+        reportBackendEvent('cc.ai_transcript', 'succeeded', {action: 'stop'});
+      })
+      .catch(() => {
+        this.log('Real-time transcript stop request failed.', 'warning');
+        reportBackendEvent('cc.ai_transcript', 'failed', {action: 'stop'});
+      });
+  }
+
   private clearCallState(): void {
     this.task = undefined;
     this.update({
       callStatus: 'none',
       interactionId: '',
       callStartedAt: 0,
+      callEndedAt: 0,
+      wrapupStartedAt: 0,
       callerName: '',
       callerNumber: '',
       interactionContext: structuredClone(initialSnapshot.interactionContext),
@@ -1249,6 +1395,8 @@ export class WebexPocController {
       destinations: [],
       destinationsLoaded: false,
       transcripts: [],
+      transcriptionStatus: 'idle',
+      transcriptionMessage: '',
       aiSuggestions: [],
       aiAssistanceLoading: false,
       aiSummaryLoading: false,

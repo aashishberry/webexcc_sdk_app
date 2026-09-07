@@ -605,6 +605,7 @@ const diagnosticEvents = new Set([
   'cc.conference',
   'cc.conference_participant',
   'cc.ai_assistance',
+  'cc.ai_transcript',
   'cc.ai_feedback',
   'cc.ai_summary',
   'cc.wrapup',
@@ -633,7 +634,7 @@ app.post('/api/diagnostics/events', requireSameOrigin, requireSession, (request,
   if (['BROWSER', 'EXTENSION', 'AGENT_DN'].includes(details.deviceType)) {
     safeDetails.deviceType = details.deviceType;
   }
-  if (['pause', 'resume', 'start', 'exit', 'accept', 'decline', 'mute', 'unmute', 'dtmf', 'hold', 'end', 'mid-call', 'post-call', 'drop', 'transfer', 'likeButton', 'dislikeButton', 'copyButton'].includes(details.action)) {
+  if (['pause', 'resume', 'start', 'stop', 'exit', 'accept', 'decline', 'mute', 'unmute', 'dtmf', 'hold', 'end', 'mid-call', 'post-call', 'drop', 'transfer', 'likeButton', 'dislikeButton', 'copyButton'].includes(details.action)) {
     safeDetails.action = details.action;
   }
   if (['agent', 'queue'].includes(details.destinationType)) {

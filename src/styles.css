@@ -353,6 +353,10 @@ button, input, textarea { font: inherit; }
 .interaction-timer { display: grid; justify-items: end; gap: 2px; }
 .interaction-timer time { color: light-dark(#167348, #58d69b); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 23px; font-variant-numeric: tabular-nums; }
 .interaction-timer span { color: light-dark(#71808a, #8f9eaa); font-size: 9px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.interaction-timers { display: flex; align-items: center; gap: 18px; }
+.interaction-timers .call-duration-timer { padding-right: 18px; border-right: 1px solid light-dark(#d5dfe6, #34424e); }
+.interaction-timers .call-duration-timer time { color: light-dark(#4e626f, #bdc9d2); }
+.interaction-timers .wrapup-timer time { color: light-dark(#665bc4, #aaa2ff); }
 
 .state-pill { min-width: 176px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 4px; border: 1px solid; border-radius: 999px; padding: 2px 9px 2px 10px; }
 .state-pill.is-available { border-color: light-dark(#a8dec3, #1d6647); background: light-dark(#e3f7ec, #0e3226); }
@@ -412,6 +416,12 @@ button, input, textarea { font: inherit; }
 .insight-empty strong { color: inherit; font-size: 12px; }
 .insight-empty.compact { min-height: 90px; border: 1px dashed light-dark(#d6dfe5, #33424f); border-radius: 10px; }
 .transcript-list { max-height: calc(100vh - 130px); overflow-y: auto; }
+.transcription-status { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px; border: 1px solid light-dark(#dce5ea, #2d3b47); border-radius: 9px; padding: 8px 10px; color: light-dark(#657580, #9ba9b3); background: light-dark(#f7f9fa, #151e27); }
+.transcription-status > span { width: 7px; height: 7px; border-radius: 50%; background: #8997a1; }
+.transcription-status p { margin: 0; font-size: 9px; line-height: 1.4; }
+.transcription-status.status-starting > span, .transcription-status.status-requested > span { background: #22a9d6; box-shadow: 0 0 0 3px #22a9d622; }
+.transcription-status.status-active > span { background: #28b777; box-shadow: 0 0 0 3px #28b77722; }
+.transcription-status.status-error > span, .transcription-status.status-unavailable > span { background: #d99b22; }
 .transcript-entry { display: grid; gap: 5px; border-left: 2px solid light-dark(#cbd7df, #344551); padding: 2px 0 2px 10px; }
 .transcript-entry > div { display: flex; justify-content: space-between; gap: 8px; }
 .transcript-entry strong { color: light-dark(#52636f, #aebbc5); font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
@@ -460,6 +470,8 @@ button, input, textarea { font: inherit; }
   .logout-button::before { content: 'Exit'; color: light-dark(#17202a, #edf3f8); font-size: 10px; }
   .panel-heading { align-items: flex-start; }
   .interaction-timer time { font-size: 19px; }
+  .interaction-timers { width: 100%; justify-content: space-between; gap: 10px; }
+  .interaction-timers .call-duration-timer { justify-items: start; padding-right: 10px; }
   .call-card .association { margin-left: 0; }
   .mobile-call-controls { grid-template-columns: repeat(3, minmax(64px, 1fr)); }
   .conference-people { grid-template-columns: repeat(2, minmax(0, 1fr)); }
