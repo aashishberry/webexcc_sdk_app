@@ -742,9 +742,9 @@ export class WebexPocController {
       }
     });
 
-    task.on('task:established', () => {
+    task.on('task:assigned', () => {
       this.update({callStatus: 'connected', ...taskControlState(task)});
-      this.log('WxCC task established.', 'success');
+      this.log('WxCC task assigned and connected.', 'success');
     });
     task.on('task:hold', () =>
       this.update({held: true, callStatus: 'held', ...taskControlState(task)}),

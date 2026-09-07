@@ -203,7 +203,7 @@ sequenceDiagram
         W->>M: Ring and connect configured phone
     end
     SDK-->>UI: Task result and UI-control updates
-    W-->>SDK: task:established
+    W-->>SDK: task:assigned
     SDK-->>UI: Connected task state
     UI->>SDK: task.hold() or task.resume()
     SDK->>W: Contact Center AQM hold or unhold
@@ -223,7 +223,7 @@ The UI treats the SDK task as the single source of truth for the active interact
 
 - `task.uiControls.main` determines whether answer, decline, hold, mute, keypad, and end are enabled.
 - `task:ui-controls-updated` refreshes capability state.
-- `task:established`, `task:hold`, and `task:resume` determine the connected and held presentation.
+- `task:assigned`, `task:hold`, and `task:resume` determine the connected and held presentation.
 - `task:wxapp-mute-state-updated` synchronizes Webex App mute state.
 - `task:media` supplies the remote audio track for browser WebRTC calls.
 - `task:end`, `task:wrapup`, and `task:wrappedup` determine completion and cleanup.

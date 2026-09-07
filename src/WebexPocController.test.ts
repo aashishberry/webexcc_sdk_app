@@ -219,12 +219,23 @@ describe('WebexPocController call controls', () => {
       update: (patch: Record<string, unknown>) => void;
     };
     internal.task = task;
+    observeTask(controller, task);
     internal.update({callStatus: 'ringing', acceptCapable: true});
 
     await controller.answer();
 
     expect(task.accept).toHaveBeenCalledOnce();
     expect(controller.getSnapshot().callStatus).toBe('answering');
+
+    task.emitTest('task:assigned');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'connected',
+      holdCapable: true,
+      endCapable: true,
+      muteCapable: true,
+      dtmfCapable: true,
+    });
   });
 
   it('declines a Webex App offer through the Contact Center task', async () => {
