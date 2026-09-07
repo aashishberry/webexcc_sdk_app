@@ -71,7 +71,6 @@ describe('WebexController performance', () => {
       available: true,
       performance: {
         source: 'graphql-search',
-        scope: 'agent',
         from: 1,
         to: 2,
         handled: 7,
@@ -139,7 +138,6 @@ describe('WebexController performance', () => {
       available: true,
       performance: {
         source: 'graphql-search',
-        scope: 'agent',
         from: 1,
         to: 2,
         handled: 8,
@@ -560,6 +558,20 @@ describe('WebexController call controls', () => {
     expect(controller.getSnapshot().muted).toBe(true);
   });
 
+  it('enables DTMF when the Webex App call is correlated before the keypad control updates', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    (task.uiControls as any).main.keypad = {isVisible: false, isEnabled: false};
+    (task as any).getWebexCallingCallId = () => 'correlated-call-id';
+    const internal = controller as unknown as {task: ITask};
+    internal.task = task;
+    observeTask(controller, task);
+
+    task.emitTest('task:ui-controls-updated');
+
+    expect(controller.getSnapshot().dtmfCapable).toBe(true);
+  });
+
   it('holds and resumes through the Contact Center task', async () => {
     const controller = new WebexController();
     const task = fakeTask(false);
@@ -682,6 +694,41 @@ describe('WebexController call controls', () => {
     expect(pauseRecording).toHaveBeenCalledOnce();
     expect(resumeRecording).toHaveBeenCalledWith({autoResumed: false});
     expect(controller.getSnapshot().recordingPaused).toBe(false);
+  });
+
+  it('reflects recording start and the SDK recording control state', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const mutableTask = task as unknown as {
+      data: Record<string, any>;
+      uiControls: Record<string, any>;
+    };
+    mutableTask.data.interaction = {
+      callProcessingDetails: {
+        recordingStarted: true,
+        recordInProgress: true,
+        pauseResumeEnabled: true,
+      },
+    };
+    mutableTask.uiControls.main.recording = {isVisible: true, isEnabled: true};
+    const internal = controller as unknown as {task: ITask};
+    internal.task = task;
+    observeTask(controller, task);
+
+    task.emitTest('task:recordingStarted');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      recordingActive: true,
+      recordingPaused: false,
+      recordingPauseCapable: true,
+    });
+
+    mutableTask.uiControls.main.recording = {isVisible: true, isEnabled: false};
+    task.emitTest('task:ui-controls-updated');
+    expect(controller.getSnapshot()).toMatchObject({
+      recordingActive: true,
+      recordingPauseCapable: false,
+    });
   });
 
   it('merges an active consultation into a conference', async () => {

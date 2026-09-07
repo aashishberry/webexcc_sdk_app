@@ -154,7 +154,7 @@ npm start
 | Mute/unmute | Contact Center SDK task | `task.toggleMute({muted})`, gated by `uiControls.main.mute`; Webex App changes synchronize through `task:wxapp-mute-state-updated` |
 | DTMF | Contact Center SDK task | `task.transmitDtmf({dtmf})`, gated by `uiControls.main.keypad`; digits are not sent to backend diagnostics |
 | End call | Contact Center SDK task | `task.end()`, gated by `uiControls.main.end`; wrap-up remains backend-authoritative |
-| Recording pause/resume | Contact Center SDK task | Available only when the interaction advertises pause/resume capability |
+| Recording status and pause/resume | Contact Center SDK task | `task:recordingStarted`, paused, and resumed events drive the left-pane status; controls are available only when the task UI control permits them |
 | Consult/transfer | Contact Center SDK task | Uses eligible agents and telephony queues returned by the SDK |
 | Consult conference | Contact Center SDK task | `consultConference()` merges the held customer and consulted destination into a three-party conference |
 | Switch consult leg | Contact Center SDK task | `switchCall()` changes the active main/consult leg when the active leg exposes the switch control |
@@ -184,7 +184,7 @@ When `profile.aiFeature.realtimeTranscripts.enable` is true, the console explici
 
 The transcript path remains profile-gated. If the SDK registration profile does not advertise real-time transcription, the UI states that explicitly and does not send an unsupported request. See the [Webex Contact Center task transcription contract](https://developer.webex.com/webex-contact-center/docs/sdks/webex-contact-center-web-sdk-tasks#real-time-transcriptions).
 
-After Contact Center registration, the controller resolves the SDK-discovered regional `wcc-api-gateway` and asks the same-origin server for current-day performance. The server validates the regional Webex hostname and time window, refreshes the OAuth token when necessary, and posts a `taskDetails` aggregation to `/search`. The query uses `endedTime`, telephony media, and the registered profile's `agentId`; it also groups the response by `lastAgent.id` and accepts metrics only when that returned ID matches the requested agent. This prevents an unscoped or team-wide response from being presented as agent performance. The verified response returns:
+After Contact Center registration, the controller resolves the SDK-discovered regional `wcc-api-gateway` and asks the same-origin server for current-day performance. The server validates the regional Webex hostname and time window, refreshes the OAuth token when necessary, and posts a `taskDetails` aggregation to `/search`. The query uses `endedTime`, telephony media, and the registered profile's `agentId` to return:
 
 - completed interactions where the user was the last handling agent;
 - average connected duration;

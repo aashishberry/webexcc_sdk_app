@@ -302,7 +302,7 @@ These operations execute directly through the SDK:
 - Webex App answer and decline through `task.accept()` and `task.decline()`
 - Webex App mute and DTMF through `task.toggleMute({muted})` and `task.transmitDtmf({dtmf})`
 - Hold, resume, and call end through `task.hold()`, `task.resume()`, and `task.end()`
-- Recording pause and resume
+- Recording-started, paused, and resumed presentation, with pause/resume capability taken from the active task leg's SDK UI control
 - Queue and buddy-agent discovery
 - Consult, transfer, consult transfer, and consult end
 - Consult conference and conference exit
@@ -420,7 +420,7 @@ The active interaction uses a stable-width two-column desktop layout: a compact 
 
 The idle workspace renders the optional `AgentPerformanceSummary` as a four-card responsive grid. Loading uses a compact skeleton, manual refresh does not block agent-state or station controls, and unavailable reporting remains an inline secondary state. The same component collapses from four to two columns on mobile.
 
-The reporting request uses the signed-in OAuth identity. Its current-day window is browser-local midnight through request time. The server filters by `lastAgent.id`, requests that ID in the grouped aggregation response, and returns metrics only when the response row matches the requested agent ID; an unverified scope is rendered as reporting unavailable rather than as personal statistics. A completed no-wrap task, `task:wrappedup`, or successful manual wrap-up schedules a deduplicated refresh after two seconds so the home view can incorporate the completed interaction; ingestion latency can still require manual refresh. Webex requires `cjp:config` or `cjp:config_read` plus an Administrator or Supervisor role; scopes alone are insufficient. Authorization or schema failures update only `performanceStatus` and never the controller's lifecycle or call state.
+The reporting request uses the signed-in OAuth identity. Its current-day window is browser-local midnight through request time. A completed no-wrap task, `task:wrappedup`, or successful manual wrap-up schedules a deduplicated refresh after two seconds so the home view can incorporate the completed interaction; ingestion latency can still require manual refresh. Webex requires `cjp:config` or `cjp:config_read` plus an Administrator or Supervisor role; scopes alone are insufficient. Authorization or schema failures update only `performanceStatus` and never the controller's lifecycle or call state.
 
 ## 12. Refresh recovery
 

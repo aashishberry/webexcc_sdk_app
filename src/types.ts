@@ -77,7 +77,6 @@ export interface AiSuggestion {
 
 export interface AgentPerformanceSummary {
   source: 'graphql-search';
-  scope: 'agent';
   from: number;
   to: number;
   handled: number;
@@ -135,6 +134,7 @@ export interface ControllerSnapshot {
   held: boolean;
   muteCapable: boolean;
   dtmfCapable: boolean;
+  recordingActive: boolean;
   recordingPaused: boolean;
   recordingPauseCapable: boolean;
   consultCapable: boolean;
@@ -230,6 +230,7 @@ export const initialSnapshot: ControllerSnapshot = {
   held: false,
   muteCapable: false,
   dtmfCapable: false,
+  recordingActive: false,
   recordingPaused: false,
   recordingPauseCapable: false,
   consultCapable: false,

@@ -260,7 +260,7 @@ function StatisticsView({snapshot, controller, busy}: InteractionInsightsProps) 
     <div className="insight-content statistics-view">
       <div className="performance-heading">
         <div>
-          <p className="section-kicker">Agent performance</p>
+          <p className="section-kicker">My performance</p>
           <h3>Today</h3>
         </div>
         <button
@@ -306,15 +306,18 @@ function StatisticsView({snapshot, controller, busy}: InteractionInsightsProps) 
         </div>
       )}
       <p className="performance-caption">
-        Verified for the signed-in agent: completed telephony interactions where you were the last handler. Times use your local day.
+        Completed telephony interactions where you were the last handling agent. Times use your local day.
       </p>
     </div>
   );
 }
 
 export function InteractionInsights(props: InteractionInsightsProps) {
-  const [tab, setTab] = useState<InsightTab>('transcript');
   const {snapshot} = props;
+  const [tab, setTab] = useState<InsightTab>(
+    snapshot.aiSummaryStatus === 'idle' ? 'transcript' : 'summary',
+  );
+
   const tabs: Array<{id: InsightTab; label: string; count?: number}> = [
     {id: 'transcript', label: 'Transcript', count: snapshot.transcripts.length},
     {id: 'assist', label: 'Assist', count: snapshot.aiSuggestions.length},

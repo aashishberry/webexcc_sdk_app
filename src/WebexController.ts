@@ -227,18 +227,33 @@ function aiSummary(payload: any): string {
 
 function recordingPauseEnabled(task: ITask): boolean {
   const data = task.data as unknown as Record<string, any>;
-  const value =
+  const activeLeg = task.uiControls?.activeLeg ?? 'main';
+  const control = task.uiControls?.[activeLeg]?.recording ?? task.uiControls?.main?.recording;
+  if (control) return Boolean(control.isEnabled);
+  const pauseResumeEnabled =
     data.interaction?.callProcessingDetails?.pauseResumeEnabled ??
     data.callProcessingDetails?.pauseResumeEnabled;
-  return value === true || value === 'true' || value === 'TRUE';
+  return recordingActive(task) && String(pauseResumeEnabled).toLowerCase() === 'true';
+}
+
+function recordingActive(task: ITask): boolean {
+  const data = task.data as unknown as Record<string, any>;
+  const details = data.interaction?.callProcessingDetails ?? data.callProcessingDetails ?? {};
+  return (
+    String(details.recordingStarted).toLowerCase() === 'true' ||
+    String(details.recordInProgress).toLowerCase() === 'true' ||
+    String(details.isPaused).toLowerCase() === 'true'
+  );
 }
 
 function recordingPaused(task: ITask): boolean {
   const data = task.data as unknown as Record<string, any>;
-  const value =
-    data.interaction?.callProcessingDetails?.isPaused ??
-    data.callProcessingDetails?.isPaused;
-  return value === true || value === 'true' || value === 'TRUE';
+  const details = data.interaction?.callProcessingDetails ?? data.callProcessingDetails ?? {};
+  const explicitlyPaused = String(details.isPaused).toLowerCase() === 'true';
+  const started = String(details.recordingStarted).toLowerCase() === 'true';
+  const progressKnown = details.recordInProgress !== undefined;
+  const inProgress = String(details.recordInProgress).toLowerCase() === 'true';
+  return explicitlyPaused || (started && progressKnown && !inProgress);
 }
 
 function epochMilliseconds(value: unknown): number {
@@ -265,13 +280,23 @@ function taskControlState(task: ITask) {
   const main = task.uiControls?.main;
   const activeLeg = task.uiControls?.activeLeg ?? 'main';
   const active = task.uiControls?.[activeLeg] ?? main;
+  const webexCallingTask = task as ITask & {getWebexCallingCallId?: () => string | null};
+  let correlatedWebexCall = false;
+  if (activeLeg === 'main') {
+    try {
+      correlatedWebexCall = Boolean(webexCallingTask.getWebexCallingCallId?.());
+    } catch {
+      // The SDK can throw while its Webex Calling correlation is still settling.
+    }
+  }
   return {
     acceptCapable: Boolean(main?.accept?.isEnabled),
     declineCapable: Boolean(main?.decline?.isEnabled),
     holdCapable: Boolean(active?.hold?.isEnabled),
     endCapable: Boolean(active?.end?.isEnabled || main?.end?.isEnabled),
     muteCapable: Boolean(active?.mute?.isEnabled),
-    dtmfCapable: Boolean(active?.keypad?.isEnabled),
+    dtmfCapable: Boolean(active?.keypad?.isEnabled || correlatedWebexCall),
+    recordingPauseCapable: recordingPauseEnabled(task),
     consultCapable: Boolean(main?.consult?.isEnabled),
     transferCapable: Boolean(main?.transfer?.isEnabled),
     switchCapable: Boolean(active?.switch?.isEnabled),
@@ -1221,8 +1246,9 @@ export class WebexController {
         participants: interactionParticipants(task, this.profile?.agentId),
         ...taskControlState(task),
         muted: task.getWxAppMuted?.() ?? false,
+        recordingActive: recordingActive(task),
         recordingPauseCapable: recordingPauseEnabled(task),
-        recordingPaused: false,
+        recordingPaused: recordingPaused(task),
         consultActive: false,
         conferenceActive: false,
         consultDestinationName: '',
@@ -1286,6 +1312,7 @@ export class WebexController {
       participants: interactionParticipants(task, this.profile?.agentId),
       ...taskControlState(task),
       muted: task.getWxAppMuted?.() ?? false,
+      recordingActive: recordingActive(task),
       recordingPauseCapable: recordingPauseEnabled(task),
       recordingPaused: recordingPaused(task),
       held: callStatus === 'held',
@@ -1318,6 +1345,8 @@ export class WebexController {
       if (this.task === task) {
         this.update({
           ...taskControlState(task),
+          recordingActive: recordingActive(task),
+          recordingPaused: recordingPaused(task),
           interactionContext: interactionContext(task),
           participants: interactionParticipants(task, this.profile?.agentId),
         });
@@ -1337,7 +1366,12 @@ export class WebexController {
 
     task.on('task:assigned', () => {
       if (this.task !== task) return;
-      this.update({callStatus: 'connected', ...taskControlState(task)});
+      this.update({
+        callStatus: 'connected',
+        ...taskControlState(task),
+        recordingActive: recordingActive(task),
+        recordingPaused: recordingPaused(task),
+      });
       this.log('WxCC task assigned and connected.', 'success');
       void this.startTranscription().catch(() => undefined);
     });
@@ -1347,8 +1381,23 @@ export class WebexController {
     task.on('task:resume', () =>
       this.update({held: false, callStatus: 'connected', ...taskControlState(task)}),
     );
-    task.on('task:recordingPaused', () => this.update({recordingPaused: true}));
-    task.on('task:recordingResumed', () => this.update({recordingPaused: false}));
+    task.on('task:recordingStarted', () => {
+      if (this.task !== task) return;
+      this.update({
+        ...taskControlState(task),
+        recordingActive: true,
+        recordingPaused: false,
+      });
+      this.log('Contact Center call recording started.', 'success');
+    });
+    task.on('task:recordingPaused', () => {
+      if (this.task !== task) return;
+      this.update({...taskControlState(task), recordingActive: true, recordingPaused: true});
+    });
+    task.on('task:recordingResumed', () => {
+      if (this.task !== task) return;
+      this.update({...taskControlState(task), recordingActive: true, recordingPaused: false});
+    });
     task.on('task:consultCreated', () => this.update({consultActive: true}));
     task.on('task:consulting', () => this.update({consultActive: true}));
     task.on('task:consultEnd', () =>
@@ -1576,6 +1625,7 @@ export class WebexController {
       held: false,
       muteCapable: false,
       dtmfCapable: false,
+      recordingActive: false,
       recordingPaused: false,
       recordingPauseCapable: false,
       consultCapable: false,

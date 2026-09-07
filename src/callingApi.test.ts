@@ -13,7 +13,6 @@ describe('getAgentPerformance', () => {
           available: true,
           performance: {
             source: 'graphql-search',
-            scope: 'agent',
             from: 100,
             to: 200,
             handled: 3,

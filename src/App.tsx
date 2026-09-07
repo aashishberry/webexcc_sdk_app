@@ -631,7 +631,7 @@ export function App() {
             onClick={() => setDiagnosticsOpen((open) => !open)}
           >
             <ControlIcon name="activity" />
-            <span>Open Diag</span>
+            <span>Diag</span>
           </button>
           <button
             className="button logout-button"
@@ -916,7 +916,7 @@ export function App() {
                   <section className="performance-section" aria-labelledby="performance-title">
                     <div className="performance-heading">
                       <div>
-                        <p className="section-kicker">Agent performance</p>
+                        <p className="section-kicker">My performance</p>
                         <h3 id="performance-title">Today</h3>
                       </div>
                       <button
@@ -963,7 +963,7 @@ export function App() {
                       </div>
                     )}
                     <p className="performance-caption">
-                      Verified for the signed-in agent: completed telephony interactions where you were the last handler. Times use your local day.
+                      Completed telephony interactions where you were the last handling agent. Times use your local day.
                     </p>
                   </section>
                 </div>
@@ -982,7 +982,15 @@ export function App() {
                       <strong>{snapshot.callerName || 'Contact Center caller'}</strong>
                       <span>{snapshot.callerNumber || 'Number unavailable'}</span>
                     </div>
-                    <span className="association association-wxcc">SDK controlled</span>
+                    <div className="call-badges">
+                      {snapshot.recordingActive && (
+                        <span className={`recording-badge ${snapshot.recordingPaused ? 'is-paused' : ''}`}>
+                          <i aria-hidden="true" />
+                          {snapshot.recordingPaused ? 'Recording paused' : 'Recording'}
+                        </span>
+                      )}
+                      <span className="association association-wxcc">SDK controlled</span>
+                    </div>
                   </div>
 
                   {[
@@ -1120,8 +1128,9 @@ export function App() {
         </section>
 
         {stationLoggedIn && activeInteraction && (
-          <InteractionInsights
-            snapshot={snapshot}
+            <InteractionInsights
+              key={`${snapshot.interactionId}:${snapshot.aiSummaryStatus}`}
+              snapshot={snapshot}
             controller={controller}
             busy={busy}
             run={run}
@@ -1152,22 +1161,22 @@ export function App() {
                 </button>
               </div>
             ) : ['ringing', 'answering'].includes(snapshot.callStatus) ? (
-              <div className="button-row call-actions">
+              <div className="mobile-call-controls incoming-call-controls">
                 <button
-                  className="call-primary-action answer-call"
+                  className="phone-control answer-call-control"
                   disabled={!canAnswer || busy !== ''}
                   onClick={() => run('answer', () => controller.answer())}
                 >
-                  <span className="call-action-icon"><ControlIcon name="phone" /></span>
-                  <span>{busy === 'answer' ? 'Answering…' : 'Answer'}</span>
+                  <span><ControlIcon name="phone" /></span>
+                  <small>{busy === 'answer' ? 'Answering…' : 'Answer'}</small>
                 </button>
                 <button
-                  className="call-primary-action decline-call"
+                  className="phone-control decline-call-control"
                   disabled={!canDecline || busy !== ''}
                   onClick={() => run('decline', () => controller.decline())}
                 >
-                  <span className="call-action-icon"><ControlIcon name="phone" /></span>
-                  <span>{busy === 'decline' ? 'Declining…' : 'Decline'}</span>
+                  <span><ControlIcon name="phone" /></span>
+                  <small>{busy === 'decline' ? 'Declining…' : 'Decline'}</small>
                 </button>
               </div>
             ) : (
@@ -1245,6 +1254,13 @@ export function App() {
                   <button
                     className={`phone-control ${dialpadOpen ? 'active' : ''}`}
                     disabled={busy !== '' || !snapshot.dtmfCapable}
+                    title={
+                      snapshot.dtmfCapable
+                        ? 'Open DTMF keypad'
+                        : snapshot.stationLoginOption === 'EXTENSION'
+                          ? 'Waiting for the SDK to correlate the active Webex App call'
+                          : 'DTMF is available for correlated Webex App calls'
+                    }
                     aria-expanded={dialpadOpen}
                     aria-controls="dtmf-dialpad"
                     onClick={() => {
@@ -1258,7 +1274,13 @@ export function App() {
                   <button
                     className={`phone-control ${snapshot.recordingPaused ? 'active warning-active' : ''}`}
                     disabled={busy !== '' || !snapshot.recordingPauseCapable}
-                    title={snapshot.recordingPauseCapable ? '' : 'Recording pause is not enabled for this interaction'}
+                    title={
+                      snapshot.recordingPauseCapable
+                        ? snapshot.recordingPaused ? 'Resume call recording' : 'Pause call recording'
+                        : snapshot.recordingActive
+                          ? 'Recording is active, but pause and resume are not permitted for this interaction'
+                          : 'Recording has not started or pause and resume are not enabled'
+                    }
                     onClick={() => run('recording', () => controller.toggleRecording())}
                   >
                     <span><ControlIcon name="record" /></span>
