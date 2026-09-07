@@ -32,7 +32,7 @@ function errorMessage(error: unknown): string {
 }
 
 function incomingNumber(task: ITask): string {
-  const data = task.data as unknown as Record<string, any>;
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
   return (
     data.callProcessingDetails?.ani ||
     data.interaction?.callProcessingDetails?.ani ||
@@ -42,7 +42,7 @@ function incomingNumber(task: ITask): string {
 }
 
 function incomingName(task: ITask): string {
-  const data = task.data as unknown as Record<string, any>;
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
   const participants = Object.values(data.interaction?.participants ?? {}) as Array<Record<string, any>>;
   const customer = participants.find((participant) => participant.pType === 'Customer');
   return (
@@ -110,11 +110,61 @@ function interactionContext(task: ITask): InteractionContext {
   };
 }
 
-function interactionParticipants(task: ITask, agentId = ''): InteractionParticipant[] {
+function interactionParticipants(
+  task: ITask,
+  agentId = '',
+  previousParticipants: InteractionParticipant[] = [],
+): InteractionParticipant[] {
   const data = (task.data ?? {}) as unknown as Record<string, any>;
   const interaction = data.interaction ?? {};
-  const media = Object.values(interaction.media ?? {}) as Array<Record<string, any>>;
-  return Object.entries(interaction.participants ?? {})
+  const mediaEntries = Object.entries(interaction.media ?? {}) as Array<[string, Record<string, any>]>;
+  const mainMediaId = firstText(interaction.mainInteractionId, data.interactionId, data.mediaResourceId);
+  const consultMediaId = firstText(data.consultMediaResourceId);
+  const mainMedia = mediaEntries.find(([id, entry]) =>
+    (mainMediaId && (id === mainMediaId || entry.mediaResourceId === mainMediaId)) ||
+    entry.mType === 'mainCall',
+  )?.[1];
+  const consultMedia = mediaEntries.find(([id, entry]) =>
+    (consultMediaId && (id === consultMediaId || entry.mediaResourceId === consultMediaId)) ||
+    entry.mType === 'consult',
+  )?.[1];
+  const activeMedia = (task.uiControls?.activeLeg ?? 'main') === 'consult'
+    ? consultMedia
+    : mainMedia;
+  const currentAgentId = firstText(agentId, data.agentId);
+  const previouslyDisconnectedIds = new Set(
+    previousParticipants
+      .filter((participant) => participant.state === 'Disconnected')
+      .map((participant) => participant.id),
+  );
+  const participantLeftId = firstText(data.participantId);
+  const isParticipantLeftEvent = /participantleftconference/i.test(
+    firstText(data.eventType, data.type),
+  );
+  const customerLeftFlag = String(
+    interaction.callProcessingDetails?.hasCustomerLeft ?? data.callProcessingDetails?.hasCustomerLeft ?? '',
+  ).toLowerCase() === 'true';
+  const callerName = incomingName(task);
+  const callerNumber = incomingNumber(task);
+  const normalizedCallerNumber = callerNumber.replace(/\D/g, '');
+  const participantRecords = Object.entries(interaction.participants ?? {}) as Array<[string, Record<string, any>]>;
+  const explicitCustomerId = participantRecords.find(([, participant]) =>
+    ['CUSTOMER', 'CALLER'].includes(firstText(participant.pType, participant.type).toUpperCase()),
+  )?.[0];
+  const inferredCustomerId = explicitCustomerId || participantRecords.find(([id, participant]) => {
+    const participantId = firstText(participant.id, participant.participantId, participant.pId, id);
+    if (
+      !Array.isArray(mainMedia?.participants) ||
+      (!mainMedia.participants.includes(id) && !mainMedia.participants.includes(participantId))
+    ) return false;
+    if (participantId === currentAgentId || participantId === interaction.owner) return false;
+    const rawType = firstText(participant.pType, participant.type).toUpperCase();
+    if (rawType.includes('AGENT') || rawType === 'SUPERVISOR' || rawType === 'VVA') return false;
+    const participantNumber = firstText(participant.dn, participant.callerId).replace(/\D/g, '');
+    return !normalizedCallerNumber || participantNumber === normalizedCallerNumber;
+  })?.[0];
+
+  const currentParticipants = Object.entries(interaction.participants ?? {})
     .map(([id, value]) => {
       const participant = value as Record<string, any>;
       const participantId = firstText(
@@ -123,21 +173,78 @@ function interactionParticipants(task: ITask, agentId = ''): InteractionParticip
         participant.pId,
         id,
       );
-      const isHeld = media.some(
-        (entry) => entry.isHold === true &&
-          Array.isArray(entry.participants) &&
-          (entry.participants.includes(id) || entry.participants.includes(participantId)),
-      );
+      const belongsTo = (entry: Record<string, any> | undefined) =>
+        Array.isArray(entry?.participants) &&
+        (entry.participants.includes(id) || entry.participants.includes(participantId));
+      const rawType = firstText(participant.pType, participant.type);
+      const normalizedType = rawType.toUpperCase();
+      const isCurrentAgent = participantId === currentAgentId || participant.agentId === currentAgentId;
+      const isCustomer =
+        ['CUSTOMER', 'CALLER'].includes(normalizedType) ||
+        id === inferredCustomerId ||
+        participantId === inferredCustomerId;
+      const hasLeft =
+        previouslyDisconnectedIds.has(participantId) ||
+        participant.hasLeft === true ||
+        String(participant.hasLeft).toLowerCase() === 'true' ||
+        (Boolean(participantLeftId) && [id, participantId].includes(participantLeftId)) ||
+        (isCustomer && customerLeftFlag);
+      const displayType = isCustomer
+        ? 'Customer'
+        : normalizedType.includes('AGENT')
+          ? 'Agent'
+          : normalizedType === 'SUPERVISOR'
+            ? 'Supervisor'
+            : rawType || 'Participant';
+      const participantMedia = isCurrentAgent && belongsTo(activeMedia)
+        ? activeMedia
+        : isCustomer && belongsTo(mainMedia)
+          ? mainMedia
+          : belongsTo(consultMedia) && !belongsTo(mainMedia)
+            ? consultMedia
+            : belongsTo(mainMedia)
+              ? mainMedia
+              : mediaEntries.find(([, entry]) => belongsTo(entry))?.[1];
+      const isHeld = participantMedia?.isHold === true;
+      const hasJoined = participant.hasJoined === true || Boolean(participantMedia);
+      const rawState = firstText(participant.currentState, participant.consultState);
+      const displayState = hasLeft
+        ? 'Disconnected'
+        : isHeld
+          ? 'Held'
+          : hasJoined
+            ? 'Connected'
+            : /reserved|initiated|offered|predial/i.test(rawState)
+              ? 'Invited'
+              : rawState || 'Invited';
       return {
         id: participantId,
-        name: firstText(participant.name, participant.pName, participant.dn, participant.callerId) || 'Participant',
-        type: firstText(participant.type, participant.pType) || 'Participant',
-        state: firstText(participant.consultState, participant.currentState) || (participant.hasJoined ? 'Connected' : 'Invited'),
+        name: firstText(
+          participant.name,
+          participant.pName,
+          isCustomer ? callerName : '',
+          participant.dn,
+          participant.callerId,
+          isCustomer ? callerNumber : '',
+        ) || (isCustomer ? 'Customer' : displayType),
+        type: displayType,
+        state: displayState,
         held: isHeld,
-        isCurrentAgent: participantId === agentId || participant.agentId === agentId,
+        isCurrentAgent,
       };
     })
     .filter((participant) => participant.name || participant.id);
+
+  const currentIds = new Set(currentParticipants.map((participant) => participant.id));
+  const departedParticipants = previousParticipants
+    .filter((participant) => !currentIds.has(participant.id))
+    .filter((participant) =>
+      participant.state === 'Disconnected' ||
+      (isParticipantLeftEvent && (!participantLeftId || participant.id === participantLeftId)),
+    )
+    .map((participant) => ({...participant, state: 'Disconnected', held: false}));
+
+  return [...currentParticipants, ...departedParticipants];
 }
 
 function transcriptEntry(payload: any): TranscriptEntry | undefined {
@@ -1478,7 +1585,11 @@ export class WebexController {
       callerName: incomingName(task),
       callerNumber: incomingNumber(task),
       interactionContext: context,
-      participants: interactionParticipants(task, this.profile?.agentId),
+      participants: interactionParticipants(
+        task,
+        this.profile?.agentId,
+        this.snapshot.participants,
+      ),
       ...taskControlState(task),
       muted: task.getWxAppMuted?.() ?? false,
       recordingActive: recordingActive(task),
@@ -1531,7 +1642,11 @@ export class WebexController {
       recordingActive: recordingActive(task),
       recordingPaused: recordingPaused(task),
       interactionContext: interactionContext(task),
-      participants: interactionParticipants(task, this.profile?.agentId),
+      participants: interactionParticipants(
+        task,
+        this.profile?.agentId,
+        this.snapshot.participants,
+      ),
       ...patch,
     });
   }
@@ -1738,7 +1853,10 @@ export class WebexController {
       this.log('Removing a conference participant failed.', 'error');
     });
     task.on('task:participantJoined', () => this.syncTaskPresentation(task, {}, true));
-    task.on('task:participantLeft', () => this.syncTaskPresentation(task, {}, true));
+    task.on('task:participantLeft', () => {
+      this.syncTaskPresentation(task, {}, true);
+      this.log('Conference participant departure reconciled.');
+    });
     task.on('task:merged', () => this.syncTaskPresentation(task, {}, true));
     task.on('task:conferenceTransferred', () => this.syncTaskPresentation(task, {}, true));
     task.on('task:exitConference', () => this.syncTaskPresentation(task, {}, true));

@@ -414,6 +414,12 @@ export function App() {
             }]
           : []),
       ];
+  const activeParticipantCount = displayParticipants.filter(
+    (participant) => participant.state !== 'Disconnected',
+  ).length;
+  const customerDisconnected = snapshot.conferenceActive && displayParticipants.some(
+    (participant) => participant.type === 'Customer' && participant.state === 'Disconnected',
+  );
 
   const selectExtension = (extension: string) => {
     const configuration = callingConfiguration;
@@ -992,12 +998,14 @@ export function App() {
                 </div>
               ) : (
                 <>
-                  <div className={`call-card call-${snapshot.callStatus}`}>
+                  <div className={`call-card call-${snapshot.callStatus} ${customerDisconnected ? 'customer-disconnected' : ''}`}>
                     <div className="avatar">{snapshot.callerName.charAt(0) || 'W'}</div>
                     <div className="caller-copy">
                       <span className="call-state">
-                        {snapshot.conferenceActive
-                          ? 'Conference'
+                        {customerDisconnected
+                          ? 'Customer left'
+                          : snapshot.conferenceActive
+                            ? 'Conference'
                           : snapshot.consultActive
                             ? 'Consultation'
                             : snapshot.callStatus}
@@ -1102,12 +1110,12 @@ export function App() {
                       {snapshot.conferenceActive && (
                         <div className="conference-session">
                           <div className="consult-heading">
-                            <div><span className="section-kicker">Conference</span><strong>Everyone is connected</strong></div>
-                            <span className="live-chip"><i />{displayParticipants.length} participants</span>
+                            <div><span className="section-kicker">Conference</span><strong>{customerDisconnected ? 'Customer has left the call' : 'Everyone is connected'}</strong></div>
+                            <span className="live-chip"><i />{activeParticipantCount} active participants</span>
                           </div>
                           <div className="conference-people" aria-label="Conference participants">
                             {displayParticipants.map((participant) => (
-                              <div key={participant.id}>
+                              <div className={participant.state === 'Disconnected' ? 'participant-disconnected' : ''} key={participant.id}>
                                 <span className="participant-avatar">{participant.name.charAt(0) || 'P'}</span>
                                 <strong>{participant.isCurrentAgent ? 'You' : participant.name}</strong>
                                 <small>{participant.held ? 'Held' : participant.state}</small>
@@ -1134,7 +1142,9 @@ export function App() {
                                 <div className="participant-row" key={participant.id}>
                                   <span className="participant-avatar">{participant.name.charAt(0) || 'P'}</span>
                                   <div><strong>{participant.isCurrentAgent ? 'You' : participant.name}</strong><span>{participant.type} · {participant.held ? 'Held' : participant.state}</span></div>
-                                  {participant.isCurrentAgent ? (
+                                  {participant.state === 'Disconnected' ? (
+                                    <span className="neutral-chip">Left</span>
+                                  ) : participant.isCurrentAgent ? (
                                     <span className="neutral-chip">Host</span>
                                   ) : (
                                     <button
@@ -1287,6 +1297,12 @@ export function App() {
                         <small>Complete transfer</small>
                       </button>
                     )}
+                    {snapshot.transferConferenceCapable && (
+                      <button className="phone-control transfer-control" disabled={busy !== ''} onClick={() => run('transfer-conference', () => controller.transferConference())}>
+                        <span><ControlIcon name="transfer" /></span>
+                        <small>Hand over conference</small>
+                      </button>
+                    )}
                   </div>
                 )}
               </>
@@ -1345,7 +1361,7 @@ export function App() {
                   </div>
                 )}
 
-                <div className="mobile-call-controls">
+                <div className={`mobile-call-controls ${snapshot.conferenceActive ? 'conference-dock-controls' : ''}`}>
                   <button
                     className={`phone-control ${snapshot.muted ? 'active' : ''}`}
                     disabled={busy !== '' || !snapshot.muteCapable}
@@ -1398,20 +1414,38 @@ export function App() {
                     <small>{snapshot.recordingPaused ? 'Resume rec.' : 'Pause rec.'}</small>
                   </button>
                   <button
-                    className={`phone-control ${activeRouteMode === 'consult' || snapshot.consultActive || snapshot.conferenceActive ? 'active' : ''}`}
-                    disabled={busy !== '' || snapshot.consultActive || (!snapshot.conferenceActive && !snapshot.consultCapable)}
+                    className={`phone-control ${activeRouteMode === 'consult' || snapshot.consultActive ? 'active' : ''}`}
+                    disabled={busy !== '' || snapshot.consultActive || !snapshot.consultCapable}
+                    title={snapshot.conferenceActive ? 'Add another participant through a consultation' : 'Consult an agent or queue'}
                     onClick={() => {
                       setDialpadTaskId('');
-                      if (snapshot.conferenceActive) setParticipantsOpen((open) => !open);
-                      else void openRoutePanel('consult');
+                      void openRoutePanel('consult');
                     }}
                   >
-                    <span><ControlIcon name={snapshot.conferenceActive ? 'participants' : 'consult'} /></span>
-                    <small>{snapshot.conferenceActive ? 'Participants' : 'Consult'}</small>
+                    <span><ControlIcon name="consult" /></span>
+                    <small>Consult</small>
                   </button>
+                  {snapshot.conferenceActive && (
+                    <button
+                      className={`phone-control ${participantsOpen ? 'active' : ''}`}
+                      disabled={busy !== ''}
+                      aria-expanded={participantsOpen}
+                      onClick={() => {
+                        setRouteMode('');
+                        setDialpadTaskId('');
+                        setParticipantsOpen((open) => !open);
+                      }}
+                    >
+                      <span><ControlIcon name="participants" /></span>
+                      <small>Participants</small>
+                    </button>
+                  )}
                   <button
                     className={`phone-control ${activeRouteMode === 'transfer' ? 'active' : ''}`}
-                    disabled={busy !== '' || snapshot.consultActive || snapshot.conferenceActive || !snapshot.transferCapable}
+                    disabled={busy !== '' || snapshot.consultActive || !snapshot.transferCapable}
+                    title={snapshot.conferenceActive && !snapshot.transferCapable
+                      ? 'For a conference handover, consult a destination and then choose Hand over conference'
+                      : 'Transfer the interaction'}
                     onClick={() => {
                       setDialpadTaskId('');
                       void openRoutePanel('transfer');
@@ -1422,12 +1456,12 @@ export function App() {
                   </button>
                 </div>
                 <button
-                  className="end-call-button"
+                  className="phone-control decline-call-control end-call-control"
                   disabled={busy !== '' || !snapshot.endCapable}
                   onClick={() => run('end', () => controller.endCall())}
                 >
                   <span><ControlIcon name="phone" /></span>
-                  End call
+                  <small>{busy === 'end' ? 'Ending…' : 'End call'}</small>
                 </button>
               </>
             )}

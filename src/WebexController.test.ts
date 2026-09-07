@@ -380,6 +380,137 @@ describe('WebexController task completion', () => {
     });
   });
 
+  it('derives participant labels and hold state from the switched media leg', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      profile: Profile;
+    };
+    internal.task = task;
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    (task.uiControls as any).activeLeg = 'main';
+    (task.uiControls as any).consult = {...(task.uiControls as any).main};
+    Object.assign((task.data as any), {
+      agentId: 'agent-1',
+      consultMediaResourceId: 'consult-1',
+      interaction: {
+        owner: 'agent-1',
+        mainInteractionId: 'interaction-1',
+        callProcessingDetails: {ani: '+14085550123', customerName: 'Caller One'},
+        participants: {
+          'agent-1': {id: 'agent-1', pType: 'Agent', name: 'Agent One', hasJoined: true},
+          'customer-1': {id: 'customer-1', dn: '+14085550123', hasJoined: true, currentState: 'hold'},
+          'agent-2': {id: 'agent-2', pType: 'Agent', name: 'Agent Two', hasJoined: true},
+        },
+        media: {
+          'interaction-1': {
+            mediaResourceId: 'interaction-1',
+            mType: 'mainCall',
+            participants: ['agent-1', 'customer-1'],
+            isHold: false,
+          },
+          'consult-1': {
+            mediaResourceId: 'consult-1',
+            mType: 'consult',
+            participants: ['agent-1', 'agent-2'],
+            isHold: true,
+          },
+        },
+      },
+    });
+    observeTask(controller, task);
+
+    task.emitTest('task:switchCall');
+
+    expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
+      expect.objectContaining({id: 'customer-1', name: 'Caller One', type: 'Customer', state: 'Connected', held: false}),
+      expect.objectContaining({id: 'agent-2', type: 'Agent', state: 'Held', held: true}),
+    ]));
+
+    (task.uiControls as any).activeLeg = 'consult';
+    (task.data as any).interaction.media['interaction-1'].isHold = true;
+    (task.data as any).interaction.media['consult-1'].isHold = false;
+    task.emitTest('task:switchCall');
+
+    expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
+      expect.objectContaining({id: 'customer-1', state: 'Held', held: true}),
+      expect.objectContaining({id: 'agent-2', state: 'Connected', held: false}),
+    ]));
+  });
+
+  it('retains a disconnected customer after a conference participant-left snapshot', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      profile: Profile;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    internal.update({conferenceActive: true, callStatus: 'connected'});
+    Object.assign((task.data as any), {
+      agentId: 'agent-1',
+      eventType: 'ParticipantJoinedConference',
+      interaction: {
+        owner: 'agent-1',
+        state: 'conference',
+        mainInteractionId: 'interaction-1',
+        participants: {
+          'agent-1': {id: 'agent-1', pType: 'Agent', name: 'Agent One', hasJoined: true},
+          'agent-2': {id: 'agent-2', pType: 'Agent', name: 'Agent Two', hasJoined: true},
+          'customer-1': {id: 'customer-1', pType: 'Customer', name: 'Caller One', hasJoined: true},
+        },
+        media: {
+          'interaction-1': {
+            mediaResourceId: 'interaction-1',
+            mType: 'mainCall',
+            participants: ['agent-1', 'agent-2', 'customer-1'],
+            isHold: false,
+          },
+        },
+      },
+    });
+    observeTask(controller, task);
+    task.emitTest('task:participantJoined');
+
+    expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
+      expect.objectContaining({id: 'customer-1', state: 'Connected'}),
+    ]));
+
+    (task.data as any).eventType = 'ParticipantLeftConference';
+    (task.data as any).participantId = 'customer-1';
+    delete (task.data as any).interaction.participants['customer-1'];
+    (task.data as any).interaction.media['interaction-1'].participants = ['agent-1', 'agent-2'];
+    task.emitTest('task:participantLeft');
+
+    expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'customer-1',
+        name: 'Caller One',
+        type: 'Customer',
+        state: 'Disconnected',
+        held: false,
+      }),
+    ]));
+
+    (task.data as any).eventType = 'ContactUpdated';
+    (task.data as any).participantId = 'agent-3';
+    (task.data as any).interaction.participants['customer-1'] = {
+      id: 'customer-1',
+      pType: 'Customer',
+      name: 'Caller One',
+      hasJoined: true,
+      hasLeft: false,
+    };
+    task.emitTest('task:ui-controls-updated');
+
+    expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
+      expect.objectContaining({id: 'customer-1', state: 'Disconnected'}),
+    ]));
+  });
+
   it('enables wrap-up when task:end reports wrapUpRequired', () => {
     const controller = new WebexController();
     const task = fakeTask(true);

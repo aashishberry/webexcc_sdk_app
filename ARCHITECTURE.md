@@ -240,7 +240,7 @@ The UI treats the SDK task as the single source of truth for the active interact
 - `task:end`, `task:wrapup`, and `task:wrappedup` determine completion and cleanup.
 - `task:hydrate` restores the task and controls after refresh.
 
-The controller does not infer the active button from the previous button label. Every material telephony event runs the same task reconciliation: read `task.uiControls.activeLeg`, read that leg's media `isHold` value, refresh participants and recording state, and then derive the connected/held presentation. This prevents event ordering during consult and conference flows from leaving stale offer controls or an inverted Hold/Resume action.
+The controller does not infer the active button from the previous button label. Every material telephony event runs the same task reconciliation: read `task.uiControls.activeLeg`, read the main and consult media `isHold` values, map each participant to its authoritative media leg, refresh recording state, and then derive the connected/held presentation. This prevents event ordering during consult and conference flows from leaving stale offer controls, inverted Hold/Resume actions, or stale participant hold badges after a call-leg switch.
 
 | SDK event group | Presentation response |
 |---|---|
@@ -249,7 +249,7 @@ The controller does not infer the active button from the previous button label. 
 | `task:ui-controls-updated`, `task:hold`, `task:resume`, `task:switchCall` | Re-read the active leg, controls, and authoritative media hold state |
 | `task:consultCreated`, `task:consultAccepted`, `task:consulting` | Show a cancellable pending consult, then replace it with connected consult controls when the destination accepts |
 | `task:consultEnd`, `task:consultQueueCancelled`, `task:consultQueueFailed`, consult `task:rejected` | Remove the consult leg and restore the main leg's connected or held presentation |
-| Conference and participant events | Refresh conference mode, participants, active leg, and task capabilities |
+| Conference and participant events | Refresh conference mode, participants, active leg, and task capabilities; retain an explicit disconnected presentation for departed participants |
 | Recording started/paused/resumed and failure events | Refresh recording state and surface operation failure without changing call lifecycle |
 | `task:rejected` on an offered primary task | Enter RONA, stop offer actions, and freeze offer timing |
 | `task:end`, `task:wrapup`, `task:wrappedup`, `task:unassigned` | Stop media/transcription and enter wrap-up or clear the task as appropriate |
@@ -386,7 +386,7 @@ sequenceDiagram
     end
 ```
 
-`exitConference()` removes the current agent and leaves the customer and consulted party connected. Participant removal is enabled only for non-host participant rows backed by authoritative IDs in the SDK task participant map. Fallback display rows remain non-actionable.
+`exitConference()` removes the current agent and leaves the customer and consulted party connected. A conference may start another SDK-gated consult until the SDK participant limit is reached. For a real multi-agent conference the SDK suppresses blind transfer; after the new consult connects, `transferConference()` is the supported handoff action. Participant removal is enabled only for non-host participant rows backed by authoritative IDs in the SDK task participant map. Fallback display rows remain non-actionable.
 
 ## 10. Controller state model
 
@@ -477,7 +477,7 @@ The SDK and backend are authoritative. Stored browser data is only a signal to a
 
 If `isAgentLoggedIn` is false, the UI returns to station login without creating a replacement station. If SDK initialization fails, the error is displayed and no cleanup request is sent automatically.
 
-Conference hydration restores the conference mode from the task. Authoritative participant records are normalized from task data; temporary display rows are reconstructed only until that SDK data arrives.
+Conference hydration restores the conference mode from the task. Authoritative participant records are normalized from task data; temporary display rows are reconstructed only until that SDK data arrives. `ParticipantLeftConference` may either mark a participant `hasLeft` or remove it from the latest roster. The controller reconciles both forms, retains the departed row as `Disconnected` for the remainder of the interaction, and excludes it from active conference counts.
 
 ## 13. Notification architecture
 

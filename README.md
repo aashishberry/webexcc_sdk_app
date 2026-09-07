@@ -26,7 +26,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, st
 | Native Webex App controls | Contact Center task UI capabilities and methods drive answer, decline, mute, unmute, and DTMF without browser call-ID matching |
 | Native voice controls | Contact Center task capabilities and methods drive answer, decline, hold, resume, mute, unmute, DTMF, and end without browser call-ID matching or polling |
 | Contact Center controls | Pause/resume recording, consult, transfer, consult transfer, consult end, consult conference, conference exit, and wrap-up |
-| Consult and conference orchestration | SDK capability-gated call-leg switching, consult completion, conference handoff, and participant removal using authoritative participant IDs when supplied |
+| Consult and conference orchestration | SDK capability-gated call-leg switching, additional consults from a conference, conference handoff, and participant removal using authoritative participant IDs when supplied |
 | Agent assistance | Explicit transcript start/stop lifecycle, live and recovered transcripts, real-time assistance requests and feedback, and mid-call/post-call summary requests through `apiAIAssistant` |
 | Agent performance | Current-day completed interactions, average connected time, average hold time, and average wrap-up time through GraphQL Search |
 | Endpoint preference | Optional persistence of the selected Webex Calling answer endpoint |
@@ -138,7 +138,7 @@ npm start
 9. During a connected call, optionally select the Available or Idle reason that should follow the interaction.
 10. Use Context, Transcript, Assist, and Summary without leaving the active interaction.
 11. Start a consultation; cancel it while a destination queue is still waiting, or after connection switch between call legs, end it, complete the transfer, or merge it into a conference.
-12. During a conference, manage participants or hand the conference over when the SDK enables those controls.
+12. During a conference, manage participants or begin another consult. Once that consult connects, hand the conference over when the SDK enables the conference-transfer control.
 13. End the call, submit a wrap-up reason when required, and use Logout for ordered cleanup.
 
 ## Control ownership
@@ -164,13 +164,13 @@ npm start
 | Wrap-up | Contact Center SDK task | Uses configured wrap-up codes after the task enters wrap-up |
 | Transcript and AI assistance | Contact Center SDK AI Assistant | Profile-gated `GET_TRANSCRIPTS` START/STOP requests, historic and live transcripts, suggested responses, user-action feedback, and summary requests remain interaction-scoped |
 
-Conference rows are reconstructed only while the SDK participant map is unavailable. Reconstructed rows cannot be removed. As soon as task data supplies authoritative participant IDs, the console enables participant removal for non-host participants and delegates the action to `task.dropConferenceParticipant()`.
+Conference rows are reconstructed only while the SDK participant map is unavailable. Reconstructed rows cannot be removed. As soon as task data supplies authoritative participant IDs, the console enables participant removal for active non-host participants and delegates the action to `task.dropConferenceParticipant()`. `ParticipantLeftConference` is also used for customer hang-up: the departed customer remains visible as `Disconnected`, is removed from the active-participant count, and cannot be dropped again.
 
 Recovered tasks use the agent participant's backend `joinTimestamp` for the call start and the backend wrap-up, termination, or ended-event timestamp for the call end. Refreshing during wrap-up therefore preserves both the completed call duration and elapsed wrap-up duration.
 
 ## Interaction insights and AI
 
-The active interaction uses a compact caller rail beside a large conversation workspace. Transcript opens by default and follows new utterances while the agent remains at the bottom; scrolling up pauses follow mode and shows a New transcript control. Incoming, connected-call, consult/transfer destination, keypad, and wrap-up actions share a bottom dock. During an initiator-owned consult, unavailable standard controls are replaced by the SDK-enabled active-leg controls such as mute, hold, keypad, switch, conference, and complete transfer. The caller rail keeps participant context and places the consult Cancel/Drop action directly on the added destination. Destination and keypad controls open as upward dock popovers so short viewports do not place them behind the controls. At tablet and mobile widths the caller rail and conversation workspace stack, while the same control dock becomes sticky and uses a three-column grid.
+The active interaction uses a compact caller rail beside a large conversation workspace. Transcript opens by default and follows new utterances while the agent remains at the bottom; scrolling up pauses follow mode and shows a New transcript control. Incoming, connected-call, consult/transfer destination, keypad, and wrap-up actions share a bottom dock. During an initiator-owned consult, unavailable standard controls are replaced by the SDK-enabled active-leg controls such as mute, hold, keypad, switch, conference, consult transfer, and conference handoff. In a conference, Consult and Participants remain separate controls so another destination can be added without losing participant management. The caller rail keeps participant context and places the consult Cancel/Drop action directly on the added destination. Destination and keypad controls open as upward dock popovers so short viewports do not place them behind the controls. At tablet and mobile widths the caller rail and conversation workspace stack, while the same control dock becomes sticky and uses a three-column grid.
 
 The conversation workspace exposes five views:
 

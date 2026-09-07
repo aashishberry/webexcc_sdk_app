@@ -187,9 +187,6 @@ input:focus { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf20; }
 .phone-control.warning-active > span { border-color: #a56b00; background: #a56b00; }
 .phone-control small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 720; }
 .phone-control:disabled > span { opacity: .5; }
-.end-call-button { display: grid; place-items: center; gap: 6px; margin: 8px auto 2px; border: 0; padding: 0; color: light-dark(#6f2630, #ffb7be); background: transparent; font-size: 10px; font-weight: 750; }
-.end-call-button > span { width: 58px; height: 58px; display: grid; place-items: center; border-radius: 50%; color: white; background: #c53a47; box-shadow: 0 9px 24px #c53a4730; }
-.end-call-button .control-icon { transform: rotate(135deg); }
 .dialpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: min(260px, 100%); margin: 0 auto 14px; border-radius: 11px; padding: 12px; background: light-dark(#f4f7f9, #111820); }
 .dialpad button { padding: 9px; color: inherit; border: 1px solid light-dark(#cbd5de, #465563); border-radius: 8px; background: transparent; font-weight: 750; }
 .dialpad button:hover:not(:disabled) { border-color: #1170cf; color: #1170cf; }
@@ -230,6 +227,8 @@ input:focus { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf20; }
 .conference-people strong, .conference-people small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conference-people strong { font-size: 11px; }
 .conference-people small { color: light-dark(#657681, #a5b3be); font-size: 9px; }
+.conference-people .participant-disconnected { opacity: .62; }
+.conference-people .participant-disconnected .participant-avatar { filter: grayscale(1); }
 .speaking-avatar { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf24; }
 .conference-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .participant-manager { border-top: 1px solid light-dark(#cbdde8, #315263); padding-top: 12px; }
@@ -395,6 +394,7 @@ button, input, textarea { font: inherit; }
 
 .call-card { position: relative; overflow: hidden; min-height: 88px; padding: 17px 19px; }
 .call-card::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; background: #28b777; }
+.call-card.customer-disconnected::before { background: #8b98a2; }
 .call-ringing::before, .call-answering::before { background: #22a9d6; }
 .call-rona::before { background: #c53a47; }
 .rona-notice { color: light-dark(#7f2b35, #ffb3bb); background: light-dark(#fff1f2, #351a20); }
@@ -413,8 +413,6 @@ button, input, textarea { font: inherit; }
 .phone-control.active { color: white; background: #1688b4; }
 .phone-control.active > span { color: white; border: 0; background: transparent; }
 .phone-control.warning-active { color: light-dark(#76500b, #f4cc6a); background: light-dark(#fff2d3, #392b12); }
-.end-call-button { margin-top: 14px; }
-.end-call-button > span { width: 52px; height: 52px; }
 .call-actions { min-height: 120px; align-items: center; }
 .conference-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
@@ -521,6 +519,7 @@ button, input, textarea { font: inherit; }
   grid-template-columns: repeat(2, minmax(110px, 1fr));
 }
 .call-control-dock .consult-dock-controls { grid-template-columns: repeat(auto-fit, minmax(82px, 1fr)); }
+.call-control-dock .conference-dock-controls { grid-template-columns: repeat(auto-fit, minmax(74px, 1fr)); }
 .consult-dock-status { width: min(680px, 100%); border: 1px solid light-dark(#e3c780, #6f5723); border-radius: 11px; padding: 13px 16px; color: light-dark(#78520b, #efd080); background: light-dark(#fff7df, #332814); text-align: center; font-size: 11px; font-weight: 680; }
 .conference-control { color: light-dark(#126b84, #8de4f3); }
 .transfer-control { color: light-dark(#155f9a, #8bc6fa); }
@@ -541,8 +540,7 @@ button, input, textarea { font: inherit; }
 .decline-call-control:hover:not(:disabled) { border-color: #c53a47; background: light-dark(#ffe2e5, #442027); }
 .decline-call-control:hover:not(:disabled) > span { border: 0; background: transparent; }
 .decline-call-control .control-icon { transform: rotate(135deg); }
-.call-control-dock .end-call-button { flex: 0 0 84px; margin: 0; }
-.call-control-dock .end-call-button > span { width: 48px; height: 48px; }
+.call-control-dock .end-call-control { flex: 0 1 118px; min-width: 96px; }
 .call-control-dock .call-actions { min-height: 0; margin: 0; padding: 0; }
 .dock-popover { position: absolute; z-index: 80; bottom: calc(100% + 10px); width: min(430px, calc(100% - 32px)); }
 .route-popover { left: 50%; transform: translateX(-50%); }
@@ -600,7 +598,7 @@ button, input, textarea { font: inherit; }
   .call-control-dock { align-items: stretch; gap: 8px; padding: 8px; }
   .call-control-dock .mobile-call-controls { grid-template-columns: repeat(3, minmax(64px, 1fr)); }
   .call-control-dock .incoming-call-controls { grid-template-columns: repeat(2, minmax(96px, 1fr)); }
-  .call-control-dock .end-call-button { flex-basis: 64px; }
+  .call-control-dock .end-call-control { flex-basis: 96px; min-width: 82px; }
   .dock-wrapup { grid-template-columns: 1fr; }
   .dock-wrapup .button { width: 100%; }
   .conference-people { grid-template-columns: repeat(2, minmax(0, 1fr)); }
