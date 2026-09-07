@@ -1,3 +1,5 @@
+import type {AgentPerformanceSummary} from './types';
+
 export interface OAuthStatus {
   configured: boolean;
   authenticated: boolean;
@@ -46,6 +48,14 @@ export interface StationConfigurationResponse {
   available: AnswerEndpoint[];
 }
 
+export type AgentPerformanceResponse =
+  | {available: true; performance: AgentPerformanceSummary}
+  | {
+      available: false;
+      reason: 'authorization' | 'query-rejected';
+      message: string;
+    };
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     credentials: 'same-origin',
@@ -77,5 +87,17 @@ export function setPreferredAnswerEndpoint(endpointId: string | null): Promise<v
   return requestJson<void>('/api/calling/preferred-endpoint', {
     method: 'PUT',
     body: JSON.stringify({endpointId}),
+  });
+}
+
+export function getAgentPerformance(options: {
+  apiBaseUrl: string;
+  agentId: string;
+  from: number;
+  to: number;
+}): Promise<AgentPerformanceResponse> {
+  return requestJson<AgentPerformanceResponse>('/api/reporting/agent-performance', {
+    method: 'POST',
+    body: JSON.stringify(options),
   });
 }

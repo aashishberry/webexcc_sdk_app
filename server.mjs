@@ -195,6 +195,86 @@ async function webexRequest(session, apiPath, options = {}) {
   return payload;
 }
 
+const agentPerformanceQuery = `
+  query AgentPerformance($from: Long!, $to: Long!, $agentId: String!) {
+    taskDetails(
+      from: $from
+      to: $to
+      timeComparator: endedTime
+      filter: {
+        channelType: { equals: telephony }
+        lastAgent: { id: { equals: $agentId } }
+      }
+      aggregations: [
+        { field: "id", type: count, name: "handled" }
+        { field: "connectedDuration", type: average, name: "averageConnectedDuration" }
+        { field: "holdDuration", type: average, name: "averageHoldDuration" }
+        { field: "wrapupDuration", type: average, name: "averageWrapupDuration" }
+      ]
+    ) {
+      tasks {
+        aggregation {
+          name
+          value
+        }
+      }
+    }
+  }
+`;
+
+function wxccApiOrigin(candidate) {
+  try {
+    const url = new URL(candidate);
+    const productionHost = /^api\.wxcc-[a-z0-9-]+\.cisco\.com$/i.test(url.hostname);
+    const nonProductionHosts = new Set([
+      'api.intgus1.ciscoccservice.com',
+      'api.qaus1.ciscoccservice.com',
+      'api.loadus1.cisco.com',
+    ]);
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.port ||
+      (!productionHost && !nonProductionHosts.has(url.hostname.toLowerCase()))
+    ) {
+      return '';
+    }
+    return url.origin;
+  } catch {
+    return '';
+  }
+}
+
+function reportingWindow(from, to) {
+  if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from >= to) return undefined;
+  const now = Date.now();
+  const maxWindowMs = 27 * 60 * 60 * 1000;
+  if (to > now + 60_000 || now - from > 2 * 24 * 60 * 60 * 1000 || to - from > maxWindowMs) {
+    return undefined;
+  }
+  return {from, to};
+}
+
+function aggregationValues(payload) {
+  const tasks = payload?.data?.taskDetails?.tasks;
+  const values = new Map();
+  if (!Array.isArray(tasks)) return values;
+  for (const task of tasks) {
+    if (!Array.isArray(task?.aggregation)) continue;
+    for (const aggregation of task.aggregation) {
+      if (typeof aggregation?.name !== 'string') continue;
+      const value = Number(aggregation.value);
+      if (Number.isFinite(value)) values.set(aggregation.name, value);
+    }
+  }
+  return values;
+}
+
+function reportingUnavailable(response, reason, message) {
+  response.json({available: false, reason, message});
+}
+
 function sendApiError(response, error, request, event) {
   logServer('error', event, request, {outcome: 'failed', ...safeErrorFields(error)});
   response.status(error.status || 502).json({
@@ -412,6 +492,100 @@ app.put(
       response.status(204).end();
     } catch (error) {
       sendApiError(response, error, request, 'calling.preferred_endpoint_update');
+    }
+  },
+);
+
+app.post(
+  '/api/reporting/agent-performance',
+  requireSameOrigin,
+  requireSession,
+  async (request, response) => {
+    response.setHeader('Cache-Control', 'no-store');
+    const agentId = typeof request.body?.agentId === 'string' ? request.body.agentId.trim() : '';
+    const apiOrigin = wxccApiOrigin(request.body?.apiBaseUrl);
+    const window = reportingWindow(request.body?.from, request.body?.to);
+    if (!apiOrigin || !agentId || agentId.length > 160 || !window) {
+      response.status(400).json({message: 'Invalid reporting request.'});
+      return;
+    }
+
+    try {
+      const accessToken = await refreshAccessToken(request.webexSession.value);
+      const searchResponse = await fetch(`${apiOrigin}/search`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: agentPerformanceQuery,
+          variables: {...window, agentId},
+        }),
+      });
+      const payload = await parseWebexResponse(searchResponse);
+
+      if (searchResponse.status === 401 || searchResponse.status === 403) {
+        logServer('warn', 'reporting.agent_performance', request, {
+          outcome: 'unavailable',
+          reason: 'authorization',
+          httpStatus: searchResponse.status,
+        });
+        reportingUnavailable(
+          response,
+          'authorization',
+          'Performance statistics require a Contact Center Administrator or Supervisor role.',
+        );
+        return;
+      }
+      if (!searchResponse.ok) {
+        const error = new Error(payload?.message || `Webex Search returned ${searchResponse.status}.`);
+        error.status = searchResponse.status;
+        error.payload = payload;
+        throw error;
+      }
+      if (Array.isArray(payload?.errors) && payload.errors.length) {
+        const authorizationError = payload.errors.some((entry) => {
+          const code = String(entry?.extensions?.code || '').toUpperCase();
+          const message = String(entry?.message || '').toLowerCase();
+          return (
+            ['UNAUTHENTICATED', 'UNAUTHORIZED', 'FORBIDDEN', 'AUTHORIZATION_ERROR'].includes(code) ||
+            message.includes('unauthorized') ||
+            message.includes('forbidden') ||
+            message.includes('not authorized')
+          );
+        });
+        logServer('warn', 'reporting.agent_performance', request, {
+          outcome: 'unavailable',
+          reason: authorizationError ? 'authorization' : 'query_rejected',
+        });
+        reportingUnavailable(
+          response,
+          authorizationError ? 'authorization' : 'query-rejected',
+          authorizationError
+            ? 'Performance statistics require a Contact Center Administrator or Supervisor role.'
+            : 'Performance statistics are not available from this tenant reporting schema.',
+        );
+        return;
+      }
+
+      const values = aggregationValues(payload);
+      const millisecondsToSeconds = (value) => Math.max(0, value || 0) / 1000;
+      const performance = {
+        source: 'graphql-search',
+        ...window,
+        handled: Math.max(0, Math.round(values.get('handled') || 0)),
+        averageConnectedSeconds: millisecondsToSeconds(values.get('averageConnectedDuration')),
+        averageHoldSeconds: millisecondsToSeconds(values.get('averageHoldDuration')),
+        averageWrapupSeconds: millisecondsToSeconds(values.get('averageWrapupDuration')),
+      };
+      response.json({available: true, performance});
+      logServer('info', 'reporting.agent_performance', request, {
+        outcome: 'succeeded',
+        metricCount: values.size,
+      });
+    } catch (error) {
+      sendApiError(response, error, request, 'reporting.agent_performance');
     }
   },
 );

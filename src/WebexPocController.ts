@@ -1,5 +1,6 @@
 import {type ITask, type Profile} from '@webex/contact-center';
 import {reportBackendEvent} from './backendDiagnostics';
+import {getAgentPerformance} from './callingApi';
 import {normalizeTeams} from './normalizers';
 import {recoveredAgentSession} from './sessionRecovery';
 import {
@@ -373,6 +374,7 @@ export class WebexPocController {
         this.log('No existing Contact Center station session was found.');
         reportBackendEvent('cc.initialize', 'succeeded', {stationRecovered: false});
       }
+      void this.loadPerformance();
     } catch (error) {
       reportBackendEvent('cc.initialize', 'failed');
       this.fail('Initialization failed', error, true);
@@ -385,6 +387,64 @@ export class WebexPocController {
 
   selectWrapupCode(codeId: string): void {
     this.update({selectedWrapupCode: codeId});
+  }
+
+  async loadPerformance(): Promise<void> {
+    if (!this.webex || !this.profile?.agentId) {
+      this.update({
+        performanceStatus: 'unavailable',
+        performanceMessage: 'Initialize Contact Center before loading performance statistics.',
+      });
+      return;
+    }
+
+    let apiBaseUrl = '';
+    try {
+      apiBaseUrl = this.webex.internal?.services?.get?.('wcc-api-gateway') || '';
+    } catch {
+      apiBaseUrl = '';
+    }
+    if (!apiBaseUrl) {
+      this.update({
+        performanceStatus: 'unavailable',
+        performanceMessage: 'The regional Contact Center reporting service was not discovered.',
+      });
+      return;
+    }
+
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const to = now.getTime();
+    this.update({performanceStatus: 'loading', performanceMessage: ''});
+    try {
+      const result = await getAgentPerformance({
+        apiBaseUrl,
+        agentId: this.profile.agentId,
+        from,
+        to,
+      });
+      if (!result.available) {
+        this.update({
+          performance: undefined,
+          performanceStatus: 'unavailable',
+          performanceMessage: result.message,
+        });
+        this.log('Contact Center reporting is unavailable for this user.', 'warning');
+        return;
+      }
+      this.update({
+        performance: result.performance,
+        performanceStatus: 'ready',
+        performanceMessage: '',
+      });
+      this.log('Today’s agent performance statistics loaded.', 'success');
+    } catch {
+      this.update({
+        performanceStatus: 'error',
+        performanceMessage: 'Performance statistics could not be loaded. Retry to check again.',
+      });
+      this.log('Agent performance statistics request failed.', 'warning');
+    }
   }
 
   async stationLogin(options: StationLoginOptions): Promise<void> {

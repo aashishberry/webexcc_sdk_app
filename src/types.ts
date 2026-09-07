@@ -81,8 +81,11 @@ export interface AgentPerformanceSummary {
   to: number;
   handled: number;
   averageConnectedSeconds: number;
+  averageHoldSeconds: number;
   averageWrapupSeconds: number;
 }
+
+export type PerformanceStatus = 'idle' | 'loading' | 'ready' | 'unavailable' | 'error';
 
 export interface ControllerSnapshot {
   lifecycle: LifecycleStatus;
@@ -141,6 +144,8 @@ export interface ControllerSnapshot {
   midCallSummary: string;
   postCallSummary: string;
   performance?: AgentPerformanceSummary;
+  performanceStatus: PerformanceStatus;
+  performanceMessage: string;
   timeline: TimelineEntry[];
   error: string;
   activeTask?: ITask;
@@ -224,6 +229,8 @@ export const initialSnapshot: ControllerSnapshot = {
   aiError: '',
   midCallSummary: '',
   postCallSummary: '',
+  performanceStatus: 'idle',
+  performanceMessage: '',
   timeline: [],
   error: '',
 };

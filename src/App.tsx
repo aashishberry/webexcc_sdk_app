@@ -35,6 +35,16 @@ function formatElapsed(milliseconds: number): string {
   return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
+function formatMetricDuration(seconds: number): string {
+  const rounded = Math.max(0, Math.round(seconds));
+  if (rounded < 60) return `${rounded}s`;
+  const minutes = Math.floor(rounded / 60);
+  const remainder = rounded % 60;
+  if (minutes < 60) return `${minutes}m ${String(remainder).padStart(2, '0')}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
 function sessionStatus(
   lifecycle: LifecycleStatus,
   agentState: string,
@@ -838,16 +848,72 @@ export function App() {
               </div>
 
               {!hasCall ? (
-                <div className="ready-state">
-                  <div className="status-orb" aria-hidden="true"><span /></div>
-                  <div>
-                    <strong>{snapshot.agentState === 'Available' ? 'Ready for an incoming task' : 'Agent is idle'}</strong>
-                    <span>
-                      {snapshot.agentState === 'Available'
-                        ? 'Contact Center is listening for interactions. Task controls remain idle until a call arrives.'
-                        : 'Change the agent state to Available when you are ready to receive calls.'}
-                    </span>
+                <div className="ready-workspace">
+                  <div className="ready-state">
+                    <div className="status-orb" aria-hidden="true"><span /></div>
+                    <div>
+                      <strong>{snapshot.agentState === 'Available' ? 'Ready for an incoming task' : 'Agent is idle'}</strong>
+                      <span>
+                        {snapshot.agentState === 'Available'
+                          ? 'Contact Center is listening for interactions. Task controls remain idle until a call arrives.'
+                          : 'Change the agent state to Available when you are ready to receive calls.'}
+                      </span>
+                    </div>
                   </div>
+
+                  <section className="performance-section" aria-labelledby="performance-title">
+                    <div className="performance-heading">
+                      <div>
+                        <p className="section-kicker">My performance</p>
+                        <h3 id="performance-title">Today</h3>
+                      </div>
+                      <button
+                        type="button"
+                        className="performance-refresh"
+                        disabled={snapshot.performanceStatus === 'loading'}
+                        onClick={() => void controller.loadPerformance()}
+                      >
+                        {snapshot.performanceStatus === 'loading' ? 'Refreshing…' : 'Refresh'}
+                      </button>
+                    </div>
+
+                    {snapshot.performanceStatus === 'loading' ? (
+                      <div className="performance-grid" aria-label="Loading performance statistics">
+                        {[0, 1, 2, 3].map((item) => <span key={item} className="metric-skeleton" />)}
+                      </div>
+                    ) : snapshot.performanceStatus === 'ready' && snapshot.performance ? (
+                      <div className="performance-grid">
+                        <article className="performance-card">
+                          <span>Completed</span>
+                          <strong>{snapshot.performance.handled}</strong>
+                          <small>interactions</small>
+                        </article>
+                        <article className="performance-card">
+                          <span>Avg talk</span>
+                          <strong>{formatMetricDuration(snapshot.performance.averageConnectedSeconds)}</strong>
+                          <small>connected time</small>
+                        </article>
+                        <article className="performance-card">
+                          <span>Avg hold</span>
+                          <strong>{formatMetricDuration(snapshot.performance.averageHoldSeconds)}</strong>
+                          <small>per interaction</small>
+                        </article>
+                        <article className="performance-card">
+                          <span>Avg wrap-up</span>
+                          <strong>{formatMetricDuration(snapshot.performance.averageWrapupSeconds)}</strong>
+                          <small>per interaction</small>
+                        </article>
+                      </div>
+                    ) : (
+                      <div className="performance-unavailable">
+                        <strong>Reporting unavailable</strong>
+                        <span>{snapshot.performanceMessage || 'Connect Contact Center to load today’s statistics.'}</span>
+                      </div>
+                    )}
+                    <p className="performance-caption">
+                      Completed telephony interactions where you were the last handling agent. Times use your local day.
+                    </p>
+                  </section>
                 </div>
               ) : (
                 <>

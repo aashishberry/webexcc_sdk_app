@@ -24,6 +24,7 @@ flowchart LR
     OAuth["Webex OAuth"]
     WxCC["Webex Contact Center services"]
     Calling["Webex Calling services"]
+    Search["WxCC GraphQL Search"]
     App["Webex App endpoint"]
     Phone["Agent dial-number endpoint"]
     BrowserMedia["Browser WebRTC media"]
@@ -35,6 +36,7 @@ flowchart LR
     UI <--> Server
     Server <--> OAuth
     Server <--> Calling
+    Server <--> Search
     Calling <--> App
     WxCC --> App
     WxCC <--> Phone
@@ -49,8 +51,8 @@ The Contact Center SDK connects directly from the browser to Webex services, rou
 |---|---|
 | `App.tsx` | Workflow composition, profile-driven station-mode selection, WebRTC permission and remote-audio binding, responsive lifecycle stage, persistent state control, call-control dock, consult/conference views, banners, theme, alerts, and diagnostics drawer |
 | `InteractionInsights.tsx` | Interaction context, historic/live transcript presentation, real-time AI assistance and feedback, and mid-call/post-call summary presentation |
-| `WebexPocController.ts` | Contact Center lifecycle, three-mode station login, native task controls, browser media events, interaction context and participant normalization, AI Assistant events, task state machine, and action coordination |
-| `server.mjs` | OAuth, token refresh, HTTP-only session cookie, Calling configuration proxy, diagnostics ingestion, static hosting |
+| `WebexPocController.ts` | Contact Center lifecycle, three-mode station login, native task controls, browser media events, interaction context and participant normalization, AI Assistant events, optional performance loading, task state machine, and action coordination |
+| `server.mjs` | OAuth, token refresh, HTTP-only session cookie, Calling configuration proxy, GraphQL Search proxy, diagnostics ingestion, static hosting |
 | `callingApi.ts` | Typed same-origin client for server routes |
 | `stationConfiguration.ts` | Extension and endpoint normalization and selection policy |
 | `sessionRecovery.ts` | Minimal recovery hint storage and SDK profile-to-UI state mapping |
@@ -83,6 +85,7 @@ flowchart TB
         Auth["OAuth endpoints"]
         ContactCenter["Contact Center services"]
         CallingApi["Calling APIs"]
+        SearchApi["WxCC GraphQL Search"]
     end
 
     React <--> Express
@@ -92,6 +95,7 @@ flowchart TB
     CCSDK <--> ContactCenter
     Express <--> Auth
     Express <--> CallingApi
+    Express <--> SearchApi
     Express <--> SessionMap
     Express --> Secret
 ```
@@ -249,6 +253,39 @@ PUT /telephony/config/people/me/settings/preferredAnswerEndpoint
 
 There is no application-owned Calling call-control proxy.
 
+### Reporting path
+
+Reporting is optional and isolated from the operational call path:
+
+```mermaid
+sequenceDiagram
+    participant UI as React UI
+    participant C as Controller
+    participant SDK as Contact Center SDK services
+    participant S as Express
+    participant R as Regional GraphQL Search
+
+    C->>SDK: Resolve wcc-api-gateway after registration
+    C->>C: Build local-midnight to now window
+    C->>S: POST /api/reporting/agent-performance
+    S->>S: Validate regional host, agent ID, and time window
+    S->>S: Refresh OAuth access token if needed
+    S->>R: taskDetails aggregation filtered by agent and telephony
+    alt Authorized Administrator or Supervisor
+        R-->>S: Count and duration aggregations
+        S-->>C: Normalized performance summary
+        C-->>UI: Render Today cards
+    else Role, service, or schema unavailable
+        R-->>S: 403 or GraphQL rejection
+        S-->>C: Reporting unavailable
+        C-->>UI: Keep agent workflow active with reporting empty state
+    end
+```
+
+The browser supplies the regional base URL discovered by the SDK, but Express accepts only HTTPS Webex Contact Center API hosts and discards any path before calling `/search`. The request uses the existing server-held OAuth session. It never logs the agent ID, token, query payload, or returned metric values.
+
+The aggregation window uses `endedTime`, so active calls are intentionally excluded. `lastAgent.id` scopes results to completed telephony interactions for which the signed-in agent was the final handling agent. Search durations are milliseconds and are converted to seconds at the server boundary.
+
 ### Contact Center SDK path
 
 These operations execute directly through the SDK:
@@ -366,7 +403,9 @@ The top bar contains a persistent agent-state selector and time-in-state display
 
 The active interaction uses a two-column desktop layout: the call lifecycle and stable control dock are the primary stage, while Context, Transcript, Assist, and Summary occupy a companion panel. At tablet and mobile breakpoints the same components stack vertically. There is no separate mobile application, SDK instance, or navigation rail.
 
-Reporting is an optional provider boundary. The controller snapshot may carry `AgentPerformanceSummary`, but the UI does not render sample values. A future backend may populate it through GraphQL Search only when an appropriately scoped Administrator or Supervisor service identity is configured; ordinary agent authorization does not silently broaden into reporting access.
+The idle workspace renders the optional `AgentPerformanceSummary` as a four-card responsive grid. Loading uses a compact skeleton, manual refresh does not block agent-state or station controls, and unavailable reporting remains an inline secondary state. The same component collapses from four to two columns on mobile.
+
+The reporting request uses the signed-in OAuth identity. Webex requires `cjp:config` or `cjp:config_read` plus an Administrator or Supervisor role; scopes alone are insufficient. Authorization or schema failures update only `performanceStatus` and never the controller's lifecycle or call state.
 
 ## 12. Refresh recovery
 
@@ -412,7 +451,7 @@ If no client exists, selecting the notification body can open the application, b
 
 ### Server-native events
 
-Express logs OAuth operations, Calling configuration requests, failures, duration, and startup directly.
+Express logs OAuth operations, Calling configuration requests, GraphQL reporting outcomes, failures, duration, and startup directly. Reporting logs contain only outcome, reason, HTTP status when relevant, and aggregate field count; they exclude agent identifiers and metric values.
 
 ### Browser-originated events
 
@@ -456,6 +495,8 @@ Conference start and exit report the allowlisted `cc.conference` diagnostic even
 | Contact Center initialization failure | Lifecycle becomes `error`; banner and backend diagnostic are emitted |
 | No assigned team | Initialization fails with an explicit error |
 | Station login failure | Existing configuration remains available for retry |
+| Reporting role missing | Performance cards show an unavailable state; station and task workflows continue |
+| Reporting query or regional service failure | Reporting exposes a retry action without changing lifecycle or call state |
 | SDK task control failure | State is preserved or restored, an application banner is shown, and a non-PII diagnostic is reported |
 | Declined offer | `task.decline()` rejects the Webex App call and the local task view clears after SDK success |
 | Conference start failure | Consultation remains visible and the error is presented in the application banner |
@@ -475,7 +516,7 @@ flowchart TB
     LB --> Node["Single Express process"]
     Node --> Static["Vite dist assets"]
     Node --> Memory["In-memory OAuth session map"]
-    Node --> Webex["Webex OAuth and Calling APIs"]
+    Node --> Webex["Webex OAuth, Calling, and GraphQL APIs"]
 ```
 
 The process binds to `0.0.0.0` and the `PORT` supplied by the platform. A single instance is required while sessions remain in memory. Free-tier spin-down, redeployment, or process restart removes OAuth sessions and requires sign-in again.

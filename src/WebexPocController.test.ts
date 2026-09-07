@@ -2,7 +2,12 @@ import {describe, expect, it, vi} from 'vitest';
 import type {ITask, Profile} from '@webex/contact-center';
 import {WebexPocController} from './WebexPocController';
 
+const {getAgentPerformanceMock} = vi.hoisted(() => ({
+  getAgentPerformanceMock: vi.fn(),
+}));
+
 vi.mock('@webex/contact-center', () => ({default: {}}));
+vi.mock('./callingApi', () => ({getAgentPerformance: getAgentPerformanceMock}));
 
 type TaskListener = (...args: any[]) => void;
 
@@ -59,6 +64,73 @@ function observeTask(controller: WebexPocController, task: ITask): void {
   const internal = controller as unknown as {attachTaskListeners: (candidate: ITask) => void};
   internal.attachTaskListeners(task);
 }
+
+describe('WebexPocController performance', () => {
+  it('loads current-day statistics from the SDK-discovered regional service', async () => {
+    getAgentPerformanceMock.mockResolvedValueOnce({
+      available: true,
+      performance: {
+        source: 'graphql-search',
+        from: 1,
+        to: 2,
+        handled: 7,
+        averageConnectedSeconds: 81,
+        averageHoldSeconds: 9,
+        averageWrapupSeconds: 14,
+      },
+    });
+    const controller = new WebexPocController();
+    const serviceGet = vi.fn(() => 'https://api.wxcc-us1.cisco.com/v1');
+    const internal = controller as unknown as {
+      webex: {internal: {services: {get: typeof serviceGet}}};
+      profile: Profile;
+    };
+    internal.webex = {internal: {services: {get: serviceGet}}};
+    internal.profile = {agentId: 'agent-1'} as Profile;
+
+    await controller.loadPerformance();
+
+    expect(serviceGet).toHaveBeenCalledWith('wcc-api-gateway');
+    expect(getAgentPerformanceMock).toHaveBeenCalledWith({
+      apiBaseUrl: 'https://api.wxcc-us1.cisco.com/v1',
+      agentId: 'agent-1',
+      from: expect.any(Number),
+      to: expect.any(Number),
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      performanceStatus: 'ready',
+      performance: {handled: 7, averageConnectedSeconds: 81},
+    });
+  });
+
+  it('keeps reporting authorization failures separate from lifecycle errors', async () => {
+    getAgentPerformanceMock.mockResolvedValueOnce({
+      available: false,
+      reason: 'authorization',
+      message: 'Performance statistics require a Supervisor role.',
+    });
+    const controller = new WebexPocController();
+    const internal = controller as unknown as {
+      webex: {internal: {services: {get: () => string}}};
+      profile: Profile;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.webex = {
+      internal: {services: {get: () => 'https://api.wxcc-eu1.cisco.com'}},
+    };
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    internal.update({lifecycle: 'available'});
+
+    await controller.loadPerformance();
+
+    expect(controller.getSnapshot()).toMatchObject({
+      lifecycle: 'available',
+      performanceStatus: 'unavailable',
+      performanceMessage: 'Performance statistics require a Supervisor role.',
+      error: '',
+    });
+  });
+});
 
 describe('WebexPocController station login', () => {
   it.each([

@@ -28,6 +28,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, st
 | Contact Center controls | Pause/resume recording, consult, transfer, consult transfer, consult end, consult conference, conference exit, and wrap-up |
 | Consult and conference orchestration | SDK capability-gated call-leg switching, consult completion, conference handoff, and participant removal using authoritative participant IDs when supplied |
 | Agent assistance | Live and recovered transcripts, real-time assistance requests and feedback, and mid-call/post-call summary requests through `apiAIAssistant` |
+| Agent performance | Current-day completed interactions, average connected time, average hold time, and average wrap-up time through GraphQL Search |
 | Endpoint preference | Optional persistence of the selected Webex Calling answer endpoint |
 | Refresh recovery | SDK automated relogin, station-state restoration, and task hydration |
 | Alerts | Web Audio ringtone and background operating-system notification with supported actions |
@@ -41,6 +42,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, st
 - Express 5
 - `@webex/contact-center` 3.12.0-next.116, pinned for Webex App Better Together task controls
 - Webex Calling configuration APIs and SDK-internal telephony controls
+- Webex Contact Center GraphQL Search API for capability-gated agent statistics
 - Browser Notifications API, Service Worker API, and Web Audio API
 - Vitest, Testing Library, and ESLint
 
@@ -84,6 +86,8 @@ cjp:config_write
 `spark:telephony_config_write` is required only when the user chooses to persist a preferred answer endpoint. Remove that feature and scope together if endpoint preference will be read-only.
 
 `spark:calls_read` and `spark:calls_write` remain required by the SDK's Webex App Better Together implementation. The application no longer calls `/telephony/calls` directly, but the SDK internally uses those Webex Calling operations for answer, decline, mute synchronization, and DTMF.
+
+`cjp:config` or `cjp:config_read` authorizes the GraphQL Search request. Webex also requires the signed-in user to have the Administrator or Supervisor role. When that role is absent, the application keeps all agent and call workflows available and presents reporting as unavailable.
 
 The Webex OAuth client must also be authorized to use the Contact Center SDK service-discovery path in the target environment. An OAuth token containing the correct scopes does not by itself resolve a client allowlisting failure from U2C service discovery.
 
@@ -171,9 +175,22 @@ The active interaction opens a companion panel with four views:
 - Assist: `getRealTimeAssistance()` requests, suggested responses, copy action, and helpful/not-helpful feedback.
 - Summary: mid-call and post-call requests through the AI Assistant event API.
 
-The UI renders empty states when the tenant, agent profile, or interaction does not enable an AI capability. It does not invent transcript, summary, queue, or performance values.
+The UI renders empty states when the tenant, agent profile, or interaction does not enable an AI or reporting capability. It does not invent transcript, summary, queue, or performance values.
 
-`AgentPerformanceSummary` is retained as an optional snapshot boundary for a future server-side reporting provider. Queue Statistics is not embedded in the core agent path. GraphQL Search normally requires administrator or supervisor authorization (`cjp:config` or `cjp:config_read` plus the required role), so agent metrics must remain hidden unless a separately authorized backend provider supplies them.
+After Contact Center registration, the controller resolves the SDK-discovered regional `wcc-api-gateway` and asks the same-origin server for current-day performance. The server validates the regional Webex hostname and time window, refreshes the OAuth token when necessary, and posts a `taskDetails` aggregation to `/search`. The query uses `endedTime`, telephony media, and the registered profile's `agentId` to return:
+
+- completed interactions where the user was the last handling agent;
+- average connected duration;
+- average hold duration; and
+- average wrap-up duration.
+
+Durations returned in milliseconds are normalized to seconds before entering the controller snapshot. The browser's local midnight defines the beginning of “Today.” A denied role, unavailable regional service, or rejected tenant schema changes only the reporting state; it does not fail SDK initialization, station login, agent state, or active call controls. The cards include a manual refresh action because historical reporting ingestion is not guaranteed to be immediate.
+
+Reporting references:
+
+- [Search API reference](https://developer.webex.com/webex-contact-center/docs/api/v1/search/search)
+- [Getting started with GraphQL Search](https://developer.webex.com/webex-contact-center/docs/getting-started-with-search-api)
+- [Statistics REST to GraphQL migration guide](https://developer.webex.com/webex-contact-center/docs/migrate-from-stats-rest-api-to-graphql)
 
 ## Station modes and endpoint selection
 
@@ -296,6 +313,7 @@ The server emits one-line JSON records suitable for Render log streams. Covered 
 - Server startup
 - OAuth authorization, callback, status, and logout
 - Calling profile and station-configuration discovery
+- GraphQL agent-performance success or availability outcome
 - Contact Center initialization, station login, state, task, recording, consult, conference, transfer, wrap-up, and logout
 - SDK task answer, decline, hold, resume, mute, unmute, DTMF, and end outcomes reported through allowlisted non-PII diagnostics
 
@@ -351,7 +369,7 @@ Required before production:
 - Define session expiration, revocation, cleanup, and key rotation.
 - Add multi-tab ownership so one agent session has one controlling tab.
 - Add centralized monitoring, alerting, and log-retention policy.
-- Add rate limits for OAuth, diagnostics, and call-control proxy routes.
+- Add rate limits for OAuth, diagnostics, Calling configuration, and reporting proxy routes.
 - Validate browser, operating-system, Webex App, endpoint, and tenant compatibility.
 - Review npm advisories inherited through the Webex dependency tree and upgrade when remediated packages are available.
 
@@ -363,12 +381,12 @@ npm run lint
 npm run build
 ```
 
-The test suite covers team normalization, station configuration, custom selectors, native SDK call controls and mute synchronization, call-control state, wrap-up behavior, idle reasons, and refresh recovery.
+The test suite covers team normalization, station configuration, custom selectors, native SDK call controls and mute synchronization, call-control state, wrap-up behavior, idle reasons, refresh recovery, and reporting state isolation.
 
 ## Source layout
 
 ```text
-server.mjs                    OAuth server, Calling configuration proxy, static host, structured logs
+server.mjs                    OAuth server, Calling and GraphQL proxies, static host, structured logs
 src/App.tsx                   Agent-console UI and workflow composition
 src/WebexPocController.ts     Contact Center task and Webex App control orchestration
 src/callingApi.ts             Same-origin browser API client and response types
