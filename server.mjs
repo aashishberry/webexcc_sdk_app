@@ -451,6 +451,9 @@ app.post('/api/diagnostics/events', requireSameOrigin, requireSession, (request,
     safeDetails.taskCount = details.taskCount;
   }
   if (diagnosticStates.has(details.state)) safeDetails.state = details.state;
+  if (['BROWSER', 'EXTENSION', 'AGENT_DN'].includes(details.deviceType)) {
+    safeDetails.deviceType = details.deviceType;
+  }
   if (['pause', 'resume', 'start', 'exit', 'accept', 'decline', 'mute', 'unmute', 'dtmf', 'hold', 'end'].includes(details.action)) {
     safeDetails.action = details.action;
   }

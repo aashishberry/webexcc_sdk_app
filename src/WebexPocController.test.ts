@@ -60,6 +60,70 @@ function observeTask(controller: WebexPocController, task: ITask): void {
   internal.attachTaskListeners(task);
 }
 
+describe('WebexPocController station login', () => {
+  it.each([
+    ['EXTENSION', '4093'],
+    ['AGENT_DN', '+14085550100'],
+  ] as const)('passes %s and its dial number to the SDK', async (loginOption, dialNumber) => {
+    const controller = new WebexPocController();
+    const stationLogin = vi.fn(async () => ({dn: dialNumber}));
+    const internal = controller as unknown as {
+      cc: {stationLogin: typeof stationLogin};
+      profile: Profile;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.cc = {stationLogin};
+    internal.profile = {} as Profile;
+    internal.update({
+      selectedTeamId: 'team-1',
+      loginVoiceOptions: ['EXTENSION', 'AGENT_DN'],
+    });
+
+    await controller.stationLogin({loginOption, dialNumber});
+
+    expect(stationLogin).toHaveBeenCalledWith({
+      teamId: 'team-1',
+      loginOption,
+      dialNumber,
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      lifecycle: 'station-logged-in',
+      stationLoginOption: loginOption,
+      stationDialNumber: dialNumber,
+    });
+  });
+
+  it('logs in with browser audio without sending a dial number', async () => {
+    const controller = new WebexPocController();
+    const stationLogin = vi.fn(async () => ({deviceType: 'BROWSER'}));
+    const internal = controller as unknown as {
+      cc: {stationLogin: typeof stationLogin};
+      profile: Profile;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.cc = {stationLogin};
+    internal.profile = {} as Profile;
+    internal.update({
+      selectedTeamId: 'team-1',
+      loginVoiceOptions: ['BROWSER'],
+      webRtcEnabled: true,
+    });
+
+    await controller.stationLogin({loginOption: 'BROWSER'});
+
+    expect(stationLogin).toHaveBeenCalledWith({
+      teamId: 'team-1',
+      loginOption: 'BROWSER',
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      lifecycle: 'station-logged-in',
+      stationLoginOption: 'BROWSER',
+      stationDialNumber: '',
+      endpointName: 'This browser',
+    });
+  });
+});
+
 describe('WebexPocController task completion', () => {
   it('enables wrap-up when task:end reports wrapUpRequired', () => {
     const controller = new WebexPocController();
@@ -234,6 +298,21 @@ describe('WebexPocController call controls', () => {
     task.emitTest('task:wxapp-mute-state-updated', {muted: true});
 
     expect(controller.getSnapshot().muted).toBe(true);
+  });
+
+  it('exposes WebRTC remote audio from the task media event', () => {
+    const controller = new WebexPocController();
+    const task = fakeTask(false);
+    const track = {kind: 'audio'} as MediaStreamTrack;
+    const internal = controller as unknown as {
+      task: ITask;
+    };
+    internal.task = task;
+    observeTask(controller, task);
+
+    task.emitTest('task:media', track);
+
+    expect(controller.getSnapshot().remoteAudioTrack).toBe(track);
   });
 
   it('uses the Contact Center task for recording controls', async () => {

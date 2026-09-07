@@ -1,8 +1,12 @@
-# Webex Contact Center Webex App Agent Console POC
+# Webex Contact Center Agent Console POC
 
-This project implements a single browser-based agent console for Webex Contact Center while retaining Webex App as the Calling media endpoint.
+This project implements a single responsive agent console for Webex Contact Center with three profile-controlled voice connection modes:
 
-The browser does not register as a Calling endpoint, request microphone access, or transport audio. Webex Contact Center provides the routed interaction and agent workflow. The Contact Center task API now owns answer, decline, hold, resume, mute, unmute, DTMF, end, and all subsequent interaction controls while Webex App remains the media endpoint.
+- Webex App through a Webex Calling extension
+- Native browser WebRTC
+- An agent dial number
+
+Webex Contact Center provides the routed interaction and agent workflow in every mode. The Contact Center task API owns answer, decline, hold, resume, mute, unmute, DTMF, end, and subsequent interaction controls. Media remains on the selected station: Webex App, this browser, or the dialed phone.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, state ownership, recovery behavior, and production considerations.
 
@@ -14,7 +18,9 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, st
 | OAuth storage | Client secret and refresh token remain on the Express server |
 | Agent identity | `/telephony/config/people/me` provides the display name shown in the console |
 | Station discovery | Contact Center extensions, available endpoints, and preferred answer endpoint are retrieved through Calling configuration APIs |
-| Contact Center startup | `@webex/contact-center` initialization, registration, team discovery, and extension station login |
+| Contact Center startup | `@webex/contact-center` initialization, registration, team discovery, profile capability discovery, and station login |
+| Station modes | Profile-gated Webex App (`EXTENSION`), browser WebRTC (`BROWSER`), and dial number (`AGENT_DN`) login |
+| Browser media | Explicit microphone preflight and remote-audio playback from `task:media` |
 | Agent state | Available and configured non-system Idle reason selection, including next-state selection during an active call |
 | Incoming task | WxCC task events drive the interaction lifecycle |
 | Native Webex App controls | Contact Center task UI capabilities and methods drive answer, decline, mute, unmute, and DTMF without browser call-ID matching |
@@ -23,7 +29,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, st
 | Endpoint preference | Optional persistence of the selected Webex Calling answer endpoint |
 | Refresh recovery | SDK automated relogin, station-state restoration, and task hydration |
 | Alerts | Web Audio ringtone and background operating-system notification with supported actions |
-| User interface | One responsive desktop/mobile layout with icon-first call controls, consult and conference participant views, system/light/dark themes, custom accessible selectors, banners, and diagnostics |
+| User interface | One responsive desktop/mobile layout with connection cards, context-specific station configuration, icon-first call controls, consult and conference views, system/light/dark themes, custom accessible selectors, banners, and diagnostics |
 | Logging | Structured backend lifecycle and action logs with allowlisted, non-PII browser diagnostics |
 
 ## Technology
@@ -116,29 +122,25 @@ npm start
 ## Agent workflow
 
 1. Select Continue with Webex and complete OAuth.
-2. Confirm or select the discovered Calling extension.
-3. Confirm or select the answer endpoint.
-4. Optionally persist the answer endpoint as the Webex Calling preference.
-5. Initialize Contact Center.
-6. Select an assigned team and complete extension station login.
-7. Change agent state to Available.
-8. Route a Webex Contact Center voice interaction to the agent.
-9. Answer or decline the call as soon as the SDK enables the corresponding task control.
-10. During a connected call, optionally select the Available or Idle reason that should follow the interaction.
-11. Use the task controls as applicable.
-12. Start a consultation, then end it, complete the transfer, or merge it into a three-party conference.
-13. From a conference, inspect participants or exit and leave the customer connected to the consulted party.
-14. End the call and submit a wrap-up reason when required.
-15. Use the dedicated Logout action for ordered cleanup.
+2. Connect Contact Center to load the agent profile, teams, and permitted voice options.
+3. Choose Webex App, This browser, or Dial number. Options not enabled by the agent profile remain visible but unavailable.
+4. Select an assigned team and provide the fields required by the chosen mode.
+5. For Webex App, confirm the extension and answer endpoint and optionally persist the endpoint preference.
+6. For browser WebRTC, grant microphone access. The SDK uses the system-default microphone and browser audio output.
+7. Complete station login.
+8. Change agent state to Available and handle the interaction with the task controls.
+9. During a connected call, optionally select the Available or Idle reason that should follow the interaction.
+10. Start a consultation, then end it, complete the transfer, or merge it into a three-party conference.
+11. End the call, submit a wrap-up reason when required, and use Logout for ordered cleanup.
 
 ## Control ownership
 
 | Control | Owner | API or SDK behavior |
 |---|---|---|
 | Contact Center initialization | Contact Center SDK | `Webex.init`, ready event, and `cc.register()` |
-| Station login/logout | Contact Center SDK | Extension login and ordered station cleanup |
+| Station login/logout | Contact Center SDK | `stationLogin()` with `BROWSER`, `EXTENSION`, or `AGENT_DN`, followed by ordered station cleanup |
 | Available/Idle | Contact Center SDK | Agent-state APIs and configured auxiliary codes; the selector remains available during connected calls to establish the agent's following state |
-| Answer | Contact Center SDK task | `task.accept()` routes internally to Webex App when `enableWxBetterTogether` is enabled and the task advertises an enabled `uiControls.main.accept` control |
+| Answer | Contact Center SDK task | `task.accept()` uses native WebRTC for browser login or Better Together for an eligible Webex App task; availability comes from `uiControls.main.accept` |
 | Decline | Contact Center SDK task | `task.decline()` routes internally to Webex App reject; the local offered-task view clears after success |
 | Hold/resume | Contact Center SDK task | `task.hold()` and `task.resume()`, gated by `uiControls.main.hold` and synchronized by task events |
 | Mute/unmute | Contact Center SDK task | `task.toggleMute({muted})`, gated by `uiControls.main.mute`; Webex App changes synchronize through `task:wxapp-mute-state-updated` |
@@ -152,7 +154,19 @@ npm start
 
 The prerelease exposes `task.dropConferenceParticipant({participantId})`, but the POC participant view currently uses reconstructed display rows rather than authoritative SDK participant IDs. Drop remains unavailable until the conference roster is mapped to those IDs and the control is validated against the task state.
 
-## Station and endpoint selection
+## Station modes and endpoint selection
+
+The registered profile is authoritative for station availability through `loginVoiceOptions` and `webRtcEnabled`:
+
+| UI option | SDK login option | Required input | Media endpoint |
+|---|---|---|---|
+| Webex App | `EXTENSION` | Extension; optional preferred answer endpoint | Registered Webex Calling device |
+| This browser | `BROWSER` | Microphone permission | Browser WebRTC microphone and remote audio |
+| Dial number | `AGENT_DN` | Dial-plan-valid number | External or PSTN phone |
+
+For WebRTC, `task.accept()` obtains the local microphone stream. The application also performs an earlier permission preflight during station login and attaches the remote audio track emitted by `task:media` to an autoplay audio element. The current SDK requests `{audio: true}`, so audio device choice follows the browser and operating-system defaults.
+
+Webex App setup uses these server-proxied APIs:
 
 The server combines these APIs:
 
@@ -219,15 +233,16 @@ Upstream references:
 
 After successful Contact Center initialization, the browser stores a recovery hint in `sessionStorage` containing only:
 
-- Extension
-- Selected answer-endpoint metadata
+- Station login option
+- Dial number or extension when applicable
+- Selected answer-endpoint metadata for Webex App mode
 
 The access token is not stored in browser storage. On a same-tab refresh:
 
 1. The browser retrieves the current OAuth state and access token from the same-origin server session.
 2. The Contact Center SDK initializes with `allowAutomatedRelogin: true`.
 3. `cc.register()` attempts the SDK silent relogin.
-4. The returned profile is authoritative for station login, team, device type, extension, and auxiliary state.
+4. The returned profile is authoritative for station login, team, device type, dial number, and auxiliary state.
 5. `task:hydrate` restores an active Contact Center interaction.
 6. `task.uiControls` and task events restore the applicable controls and call state.
 

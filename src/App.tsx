@@ -19,7 +19,12 @@ import {ControlIcon} from './ControlIcon';
 import {useCallAlerts} from './useCallAlerts';
 import {useTheme} from './useTheme';
 import {clearRecoveryIntent, readRecoveryIntent, saveRecoveryIntent} from './sessionRecovery';
-import type {InitializeOptions, LifecycleStatus} from './types';
+import type {
+  InitializeOptions,
+  LifecycleStatus,
+  StationLoginOption,
+  StationLoginOptions,
+} from './types';
 
 const digits = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
 
@@ -50,14 +55,22 @@ export function App() {
   const [callingConfigurationError, setCallingConfigurationError] = useState('');
   const [answerEndpointId, setAnswerEndpointId] = useState('');
   const [rememberEndpoint, setRememberEndpoint] = useState(false);
+  const [stationMode, setStationMode] = useState<StationLoginOption>('EXTENSION');
+  const [extension, setExtension] = useState('');
+  const [dialNumber, setDialNumber] = useState('');
+  const [microphoneStatus, setMicrophoneStatus] = useState<
+    'unchecked' | 'requesting' | 'ready' | 'denied'
+  >('unchecked');
+  const [microphoneName, setMicrophoneName] = useState('System default microphone');
   const [dialpadTaskId, setDialpadTaskId] = useState('');
   const [routeMode, setRouteMode] = useState<'consult' | 'transfer' | ''>('');
   const [routeTaskId, setRouteTaskId] = useState('');
   const [destinationId, setDestinationId] = useState('');
   const [participantsOpen, setParticipantsOpen] = useState(false);
   const [banner, setBanner] = useState<{kind: 'error'; message: string}>();
-  const [form, setForm] = useState<InitializeOptions>({accessToken: '', extension: ''});
+  const [form, setForm] = useState<InitializeOptions>({accessToken: ''});
   const recoveryAttempted = useRef(false);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
     void getOAuthStatus()
@@ -84,8 +97,8 @@ export function App() {
         const extensions = configuredExtensions(configuration);
         const primary = extensions.find((candidate) => candidate.type === 'PRIMARY') ?? extensions[0];
         const value = primary ? stationValue(primary) : '';
-        if (value) setForm((current) => ({...current, extension: value}));
-        setAnswerEndpointId(defaultEndpointId(configuration, primary));
+        if (value) setExtension((current) => current || value);
+        setAnswerEndpointId((current) => current || defaultEndpointId(configuration, primary));
       })
       .catch((error) => {
         if (!cancelled) {
@@ -99,6 +112,26 @@ export function App() {
   }, [oauth?.authenticated]);
 
   useEffect(() => {
+    const audio = remoteAudioRef.current;
+    if (!audio) return;
+    audio.srcObject = snapshot.remoteAudioTrack
+      ? new MediaStream([snapshot.remoteAudioTrack])
+      : null;
+    if (snapshot.remoteAudioTrack) {
+      void audio.play().catch(() => {
+        console.error('[webex-poc] Browser call audio playback was blocked.');
+        setBanner({
+          kind: 'error',
+          message: 'Caller audio was blocked by the browser. Allow audio playback for this site and retry.',
+        });
+      });
+    }
+    return () => {
+      audio.srcObject = null;
+    };
+  }, [snapshot.remoteAudioTrack]);
+
+  useEffect(() => {
     if (!oauth?.authenticated || recoveryAttempted.current) return;
     recoveryAttempted.current = true;
     const intent = readRecoveryIntent();
@@ -108,25 +141,36 @@ export function App() {
 
     const recover = async () => {
       await Promise.resolve();
+      setStationMode(intent.loginOption);
+      if (intent.loginOption === 'EXTENSION') {
+        setExtension(intent.dialNumber);
+      } else if (intent.loginOption === 'AGENT_DN') {
+        setDialNumber(intent.dialNumber);
+      }
+      setAnswerEndpointId(intent.answerEndpoint?.id || '');
       setBusy('recovery');
       setBanner(undefined);
       try {
-        await controller.initialize({
-          accessToken: oauth.accessToken,
-          extension: intent.extension,
-          answerEndpoint: intent.answerEndpoint,
-        });
+        await controller.initialize({accessToken: oauth.accessToken});
         const recoveredSnapshot = controller.getSnapshot();
+        const recoveredMode = recoveredSnapshot.stationLoginOption ||
+          (recoveredSnapshot.loginVoiceOptions.includes(intent.loginOption)
+            ? intent.loginOption
+            : recoveredSnapshot.loginVoiceOptions[0] || 'EXTENSION');
+        const recoveredDialNumber = recoveredSnapshot.stationDialNumber || intent.dialNumber;
+        setStationMode(recoveredMode);
+        if (recoveredMode === 'EXTENSION') setExtension(recoveredDialNumber);
+        if (recoveredMode === 'AGENT_DN') setDialNumber(recoveredDialNumber);
         saveRecoveryIntent({
-          accessToken: '',
-          extension: recoveredSnapshot.extension || intent.extension,
-          answerEndpoint: intent.answerEndpoint,
+          loginOption: recoveredMode,
+          dialNumber: recoveredMode === 'BROWSER' ? '' : recoveredDialNumber,
+          answerEndpoint: recoveredMode === 'EXTENSION' ? intent.answerEndpoint : undefined,
         });
       } catch (error) {
         console.error('[webex-poc] Contact Center session recovery failed.');
         setBanner({
           kind: 'error',
-          message: `The previous session could not be restored. Check the extension and initialize again. ${
+          message: `The previous session could not be restored. Check the station settings and initialize again. ${
             error instanceof Error ? error.message : String(error)
           }`,
         });
@@ -176,7 +220,7 @@ export function App() {
   const headerStatus = sessionStatus(snapshot.lifecycle, snapshot.agentState);
   const extensionOptions = configuredExtensions(callingConfiguration);
   const selectedExtension = extensionOptions.find(
-    (candidate) => stationValue(candidate) === form.extension,
+    (candidate) => stationValue(candidate) === extension,
   );
   const answerEndpointOptions = endpointsForExtension(callingConfiguration, selectedExtension);
   const selectedEndpoint = answerEndpointOptions.find(
@@ -230,38 +274,122 @@ export function App() {
     label: `${destination.name}${destination.detail ? ` · ${destination.detail}` : ''}`,
     group: destination.type === 'agent' ? 'Agents' : 'Queues',
   }));
+  const selectedAnswerEndpoint = selectedEndpoint
+    ? {
+        id: selectedEndpoint.id,
+        name: selectedEndpoint.name || 'Selected Webex endpoint',
+        type: selectedEndpoint.type,
+        status: selectedEndpoint.status,
+      }
+    : undefined;
+  const stationDialNumber = stationMode === 'EXTENSION' ? extension : dialNumber;
+  const stationConnectionLabel =
+    snapshot.stationLoginOption === 'BROWSER'
+      ? 'Browser audio'
+      : snapshot.stationLoginOption === 'AGENT_DN'
+        ? `Dial number ${snapshot.stationDialNumber}`
+        : snapshot.stationLoginOption === 'EXTENSION'
+          ? `Webex App · ${snapshot.stationDialNumber}`
+          : 'Station not connected';
+  const stationModes: Array<{
+    id: StationLoginOption;
+    title: string;
+    description: string;
+    icon: 'webex' | 'desktop' | 'dial';
+  }> = [
+    {
+      id: 'EXTENSION',
+      title: 'Webex App',
+      description: 'Answer on a registered Webex Calling device.',
+      icon: 'webex',
+    },
+    {
+      id: 'BROWSER',
+      title: 'This browser',
+      description: 'Use WebRTC with this device’s microphone and speakers.',
+      icon: 'desktop',
+    },
+    {
+      id: 'AGENT_DN',
+      title: 'Dial number',
+      description: 'Send Contact Center calls to another phone number.',
+      icon: 'dial',
+    },
+  ];
+  const stationTargetValid = stationMode === 'BROWSER' || Boolean(stationDialNumber.trim());
+  const endpointSelectionValid =
+    stationMode !== 'EXTENSION' ||
+    answerEndpointOptions.length === 0 ||
+    Boolean(selectedEndpoint);
   const topbarSubtitle = !initialized
-    ? 'Contact Center + Webex App controls'
-    : `Extension ${snapshot.extension}${stationLoggedIn && selectedTeam ? ` · ${selectedTeam.name}` : ''}`;
+    ? 'A focused workspace for customer calls'
+    : `${stationLoggedIn ? stationConnectionLabel : 'Contact Center ready'}${
+        stationLoggedIn && selectedTeam ? ` · ${selectedTeam.name}` : ''
+      }`;
 
   const selectExtension = (extension: string) => {
     const configuration = callingConfiguration;
     const selected = extensionOptions.find((candidate) => stationValue(candidate) === extension);
-    setForm({...form, extension});
+    setExtension(extension);
     setAnswerEndpointId(defaultEndpointId(configuration, selected));
     setRememberEndpoint(false);
   };
 
   const initialize = async () => {
-    if (rememberEndpoint && selectedEndpoint) {
+    await controller.initialize(form);
+    const registered = controller.getSnapshot();
+    const selectedMode = registered.loginVoiceOptions.includes(stationMode)
+      ? stationMode
+      : registered.loginVoiceOptions[0] || 'EXTENSION';
+    setStationMode(selectedMode);
+    saveRecoveryIntent({
+      loginOption: selectedMode,
+      dialNumber: selectedMode === 'EXTENSION' ? extension : selectedMode === 'AGENT_DN' ? dialNumber : '',
+      answerEndpoint: selectedMode === 'EXTENSION' ? selectedAnswerEndpoint : undefined,
+    });
+  };
+
+  const prepareBrowserAudio = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMicrophoneStatus('denied');
+      throw new Error('This browser does not expose microphone access. Use HTTPS or choose another station mode.');
+    }
+    setMicrophoneStatus('requesting');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+      const track = stream.getAudioTracks()[0];
+      setMicrophoneName(track?.label || 'System default microphone');
+      for (const mediaTrack of stream.getTracks()) mediaTrack.stop();
+      setMicrophoneStatus('ready');
+    } catch (error) {
+      setMicrophoneStatus('denied');
+      throw new Error(
+        `Microphone access is required for browser calling. ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  };
+
+  const stationLogin = async () => {
+    if (stationMode === 'BROWSER' && microphoneStatus !== 'ready') {
+      await prepareBrowserAudio();
+    }
+    if (stationMode === 'EXTENSION' && rememberEndpoint && selectedEndpoint) {
       await setPreferredAnswerEndpoint(selectedEndpoint.id);
       setCallingConfiguration((current) =>
         current ? {...current, preferred: selectedEndpoint} : current,
       );
       setRememberEndpoint(false);
     }
-    const options: InitializeOptions = {
-      ...form,
-      answerEndpoint: selectedEndpoint
-        ? {
-            id: selectedEndpoint.id,
-            name: selectedEndpoint.name || 'Selected Webex endpoint',
-            type: selectedEndpoint.type,
-            status: selectedEndpoint.status,
-          }
-        : undefined,
+    const options: StationLoginOptions = {
+      loginOption: stationMode,
+      ...(stationMode === 'BROWSER' ? {} : {dialNumber: stationDialNumber}),
+      ...(stationMode === 'EXTENSION' && selectedAnswerEndpoint
+        ? {answerEndpoint: selectedAnswerEndpoint}
+        : {}),
     };
-    await controller.initialize(options);
+    await controller.stationLogin(options);
     saveRecoveryIntent(options);
   };
 
@@ -292,12 +420,17 @@ export function App() {
     setCallingConfigurationError('');
     setAnswerEndpointId('');
     setRememberEndpoint(false);
+    setStationMode('EXTENSION');
+    setDialNumber('');
+    setMicrophoneStatus('unchecked');
+    setMicrophoneName('System default microphone');
     setDialpadTaskId('');
     setRouteMode('');
     setRouteTaskId('');
     setDestinationId('');
     setParticipantsOpen(false);
-    setForm({accessToken: '', extension: ''});
+    setForm({accessToken: ''});
+    setExtension('');
   };
 
   if (!oauth) {
@@ -341,6 +474,7 @@ export function App() {
 
   return (
     <main className="app-shell">
+      <audio ref={remoteAudioRef} className="remote-audio" autoPlay aria-hidden="true" />
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark small">W</span>
@@ -403,134 +537,206 @@ export function App() {
             <>
               <div className="panel-heading">
                 <div>
-                  <p className="section-kicker">Station setup</p>
-                  <h2>{initialized ? 'Choose your agent team' : 'Choose / enter your extension'}</h2>
+                  <p className="section-kicker">{initialized ? 'Voice connection' : 'Contact Center'}</p>
+                  <h2>{initialized ? 'Where should calls ring?' : 'Connect your agent workspace'}</h2>
                 </div>
                 <span className={initialized ? 'pending-chip' : 'neutral-chip'}>
-                  {initialized ? 'Station login required' : 'CC not initialized'}
+                  {initialized ? 'Station offline' : 'OAuth connected'}
                 </span>
               </div>
 
-              {oauth.profileError && (
-                <div className="notice warning-notice profile-warning">
-                  Calling profile unavailable{oauth.profileError.status ? ` · HTTP ${oauth.profileError.status}` : ''}
-                </div>
-              )}
-
               {!initialized ? (
-                <div className="station-configuration">
-                  <div className="station-selection-grid">
-                    <label>
-                      Calling extension
-                      {extensionOptions.length > 0 ? (
-                        <SelectMenu
-                          ariaLabel="Calling extension"
-                          value={form.extension}
-                          options={extensionMenuOptions}
-                          placeholder="Select a Calling extension"
-                          onChange={selectExtension}
-                        />
-                      ) : (
-                        <input
-                          inputMode="tel"
-                          placeholder="Enter your Calling extension"
-                          value={form.extension}
-                          onChange={(event) => selectExtension(event.target.value)}
-                        />
-                      )}
-                    </label>
-                    <label>
-                      Answer device
-                      <SelectMenu
-                        ariaLabel="Answer device"
-                        value={answerEndpointId}
-                        disabled={answerEndpointOptions.length === 0}
-                        options={endpointMenuOptions}
-                        placeholder={answerEndpointOptions.length ? 'Select an answer device' : 'Primary device fallback'}
-                        onChange={(value) => {
-                          setAnswerEndpointId(value);
-                          setRememberEndpoint(false);
-                        }}
-                      />
-                    </label>
+                <div className="connect-workspace">
+                  <div className="connection-summary">
+                    <span className="connection-illustration"><ControlIcon name="headset" /></span>
+                    <div>
+                      <strong>Webex authorization is ready</strong>
+                      <span>
+                        Initialize the Contact Center SDK to load your teams, voice options,
+                        agent states, and task controls.
+                      </span>
+                    </div>
                   </div>
-                  {selectedEndpoint && (
-                    <label
-                      className={`remember-endpoint ${endpointAlreadyPreferred ? 'current-preference' : ''}`}
+                  <div className="connect-actions">
+                    <span>Station preferences are selected after your agent profile loads.</span>
+                    <button
+                      className="button primary initialize-button"
+                      disabled={busy !== ''}
+                      onClick={() => run('initialize', initialize)}
                     >
-                      <input
-                        type="checkbox"
-                        checked={endpointAlreadyPreferred || rememberEndpoint}
-                        disabled={endpointAlreadyPreferred}
-                        onChange={(event) => setRememberEndpoint(event.target.checked)}
-                      />
-                      {endpointAlreadyPreferred
-                        ? 'Current preferred Webex Calling answer device'
-                        : 'Use as my preferred Webex Calling answer device'}
-                    </label>
-                  )}
-                  <button
-                    className="button primary initialize-button"
-                    disabled={
-                      busy !== '' ||
-                      !form.extension.trim() ||
-                      (answerEndpointOptions.length > 0 && !selectedEndpoint)
-                    }
-                    onClick={() => run('initialize', initialize)}
-                  >
-                    {busy === 'recovery'
-                      ? 'Restoring session…'
-                      : busy === 'initialize'
-                        ? 'Initializing…'
-                        : 'Initialize Contact Center'}
-                  </button>
+                      {busy === 'recovery'
+                        ? 'Restoring workspace…'
+                        : busy === 'initialize'
+                          ? 'Connecting…'
+                          : 'Connect Contact Center'}
+                    </button>
+                  </div>
                 </div>
               ) : (
-                <div className="setup-action">
-                  <label>
-                    Agent team
-                    <SelectMenu
-                      ariaLabel="Agent team"
-                      value={snapshot.selectedTeamId}
-                      options={teamMenuOptions}
-                      onChange={(value) => controller.selectTeam(value)}
-                    />
-                  </label>
-                  <button
-                    className="button primary"
-                    disabled={busy !== '' || !snapshot.selectedTeamId}
-                    onClick={() => run('station-login', () => controller.stationLogin())}
-                  >
-                    {busy === 'station-login' ? 'Signing in…' : 'Station login'}
-                  </button>
-                </div>
-              )}
+                <div className="station-login-composer">
+                  <div className="station-mode-grid" role="radiogroup" aria-label="Voice connection">
+                    {stationModes.map((mode) => {
+                      const available =
+                        snapshot.loginVoiceOptions.includes(mode.id) &&
+                        (mode.id !== 'BROWSER' || snapshot.webRtcEnabled);
+                      return (
+                        <label
+                          key={mode.id}
+                          className={`station-mode-card ${stationMode === mode.id ? 'is-selected' : ''} ${!available ? 'is-disabled' : ''}`}
+                        >
+                          <input
+                            type="radio"
+                            name="station-mode"
+                            value={mode.id}
+                            checked={stationMode === mode.id}
+                            disabled={!available || busy !== ''}
+                            onChange={() => setStationMode(mode.id)}
+                          />
+                          <span className="station-mode-icon"><ControlIcon name={mode.icon} /></span>
+                          <span className="station-mode-copy">
+                            <strong>{mode.title}</strong>
+                            <small>{available ? mode.description : 'Not enabled for this agent profile.'}</small>
+                          </span>
+                          <span className="station-mode-radio" aria-hidden="true" />
+                        </label>
+                      );
+                    })}
+                  </div>
 
-              {!initialized && selectedEndpoint && (
-                <div className="calling-device">
-                  <span>Calling device</span>
-                  <strong>{selectedEndpoint.name || selectedEndpoint.type || 'Assigned endpoint'}</strong>
-                  <span className={`device-status status-${selectedEndpoint.status?.toLowerCase()}`}>
-                    {selectedEndpoint.status === 'CONNECTED'
-                      ? 'Registered'
-                      : selectedEndpoint.status === 'NOT_CONNECTED'
-                        ? 'Not registered'
-                        : 'Available'}
-                  </span>
-                </div>
-              )}
-              {!initialized && callingConfigurationError && (
-                <div className="notice warning-notice">
-                  Calling extensions could not be loaded. Enter the extension manually.
-                </div>
-              )}
+                  <div className="station-details-card">
+                    <label>
+                      Agent team
+                      <SelectMenu
+                        ariaLabel="Agent team"
+                        value={snapshot.selectedTeamId}
+                        options={teamMenuOptions}
+                        onChange={(value) => controller.selectTeam(value)}
+                      />
+                    </label>
 
-              {initialized && (
-                <dl className="facts station-facts">
-                  <div><dt>Extension</dt><dd>{snapshot.extension}</dd></div>
-                  <div><dt>Answer endpoint</dt><dd>{snapshot.endpointName || 'Primary device fallback'}</dd></div>
-                  <div><dt>Webex endpoint</dt><dd>{snapshot.lineStatus}</dd></div>
-                </dl>
+                    {stationMode === 'EXTENSION' && (
+                      <>
+                        <div className="station-selection-grid">
+                          <label>
+                            Calling extension
+                            {extensionOptions.length > 0 ? (
+                              <SelectMenu
+                                ariaLabel="Calling extension"
+                                value={extension}
+                                options={extensionMenuOptions}
+                                placeholder="Select a Calling extension"
+                                onChange={selectExtension}
+                              />
+                            ) : (
+                              <input
+                                inputMode="tel"
+                                autoComplete="tel"
+                                placeholder="Enter your Calling extension"
+                                value={extension}
+                                onChange={(event) => selectExtension(event.target.value)}
+                              />
+                            )}
+                          </label>
+                          <label>
+                            Answer device
+                            <SelectMenu
+                              ariaLabel="Answer device"
+                              value={answerEndpointId}
+                              disabled={answerEndpointOptions.length === 0}
+                              options={endpointMenuOptions}
+                              placeholder={answerEndpointOptions.length ? 'Select an answer device' : 'Webex default device'}
+                              onChange={(value) => {
+                                setAnswerEndpointId(value);
+                                setRememberEndpoint(false);
+                              }}
+                            />
+                          </label>
+                        </div>
+                        {selectedEndpoint && (
+                          <label className={`remember-endpoint ${endpointAlreadyPreferred ? 'current-preference' : ''}`}>
+                            <input
+                              type="checkbox"
+                              checked={endpointAlreadyPreferred || rememberEndpoint}
+                              disabled={endpointAlreadyPreferred}
+                              onChange={(event) => setRememberEndpoint(event.target.checked)}
+                            />
+                            {endpointAlreadyPreferred
+                              ? 'Current preferred Webex Calling answer device'
+                              : 'Use as my preferred Webex Calling answer device'}
+                          </label>
+                        )}
+                        {callingConfigurationError && (
+                          <div className="notice warning-notice compact-notice">
+                            Calling configuration is unavailable. You can enter an extension manually;
+                            Webex will use its configured device routing.
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {stationMode === 'BROWSER' && (
+                      <div className={`browser-audio-status microphone-${microphoneStatus}`}>
+                        <span className="browser-audio-icon"><ControlIcon name="mic" /></span>
+                        <div>
+                          <strong>{microphoneStatus === 'ready' ? microphoneName : 'Browser audio'}</strong>
+                          <span>
+                            {microphoneStatus === 'ready'
+                              ? 'Microphone access is ready. Caller audio will play in this tab.'
+                              : microphoneStatus === 'denied'
+                                ? 'Microphone access is blocked. Allow it in browser site settings and retry.'
+                                : 'Microphone permission will be requested when you sign in to the station.'}
+                          </span>
+                        </div>
+                        {microphoneStatus !== 'ready' && (
+                          <button
+                            type="button"
+                            className="button secondary audio-check-button"
+                            disabled={busy !== '' || microphoneStatus === 'requesting'}
+                            onClick={() => run('microphone', prepareBrowserAudio)}
+                          >
+                            {microphoneStatus === 'requesting' ? 'Checking…' : 'Check audio'}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {stationMode === 'AGENT_DN' && (
+                      <label>
+                        Dial number
+                        <input
+                          inputMode="tel"
+                          autoComplete="tel"
+                          placeholder="Enter a valid number, preferably E.164"
+                          value={dialNumber}
+                          onChange={(event) => setDialNumber(event.target.value)}
+                        />
+                        <small className="field-help">The SDK validates this number against the dial plan assigned to your profile.</small>
+                      </label>
+                    )}
+
+                    <div className="station-login-footer">
+                      <span>
+                        {stationMode === 'BROWSER'
+                          ? 'Calls and media stay in this browser tab.'
+                          : stationMode === 'AGENT_DN'
+                            ? 'Incoming calls will ring the number above.'
+                            : 'Incoming calls will ring in Webex App.'}
+                      </span>
+                      <button
+                        className="button primary station-login-button"
+                        disabled={
+                          busy !== '' ||
+                          !snapshot.selectedTeamId ||
+                          !stationTargetValid ||
+                          !endpointSelectionValid
+                        }
+                        onClick={() => run('station-login', stationLogin)}
+                      >
+                        {busy === 'station-login' ? 'Connecting station…' : 'Use this connection'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
               )}
             </>
           ) : (
@@ -656,6 +862,12 @@ export function App() {
                           <span>{busy === 'decline' ? 'Declining…' : 'Decline'}</span>
                         </button>
                       </div>
+                      )}
+
+                      {snapshot.callStatus === 'ringing' && !canAnswer && (
+                        <div className="notice pending-notice station-answer-hint">
+                          Answer this interaction on {stationConnectionLabel.toLowerCase()}.
+                        </div>
                       )}
 
                       {['connected', 'held'].includes(snapshot.callStatus) && (

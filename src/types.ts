@@ -21,6 +21,8 @@ export type CallStatus =
 
 export type LogLevel = 'info' | 'success' | 'warning' | 'error';
 
+export type StationLoginOption = 'BROWSER' | 'EXTENSION' | 'AGENT_DN';
+
 export interface TimelineEntry {
   id: number;
   at: string;
@@ -47,7 +49,10 @@ export interface ControllerSnapshot {
   agentState: string;
   teams: AgentTeam[];
   selectedTeamId: string;
-  extension: string;
+  stationLoginOption: StationLoginOption | '';
+  stationDialNumber: string;
+  loginVoiceOptions: StationLoginOption[];
+  webRtcEnabled: boolean;
   lineStatus: string;
   interactionId: string;
   callerName: string;
@@ -76,11 +81,16 @@ export interface ControllerSnapshot {
   timeline: TimelineEntry[];
   error: string;
   activeTask?: ITask;
+  remoteAudioTrack?: MediaStreamTrack;
 }
 
 export interface InitializeOptions {
   accessToken: string;
-  extension: string;
+}
+
+export interface StationLoginOptions {
+  loginOption: StationLoginOption;
+  dialNumber?: string;
   answerEndpoint?: {
     id: string;
     name: string;
@@ -96,7 +106,10 @@ export const initialSnapshot: ControllerSnapshot = {
   agentState: 'Signed out',
   teams: [],
   selectedTeamId: '',
-  extension: '',
+  stationLoginOption: '',
+  stationDialNumber: '',
+  loginVoiceOptions: [],
+  webRtcEnabled: false,
   lineStatus: 'Not checked',
   interactionId: '',
   callerName: '',

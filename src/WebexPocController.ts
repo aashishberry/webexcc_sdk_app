@@ -8,6 +8,8 @@ import {
   type InitializeOptions,
   type LifecycleStatus,
   type LogLevel,
+  type StationLoginOption,
+  type StationLoginOptions,
 } from './types';
 
 type SnapshotListener = (snapshot: ControllerSnapshot) => void;
@@ -75,6 +77,19 @@ function taskControlState(task: ITask) {
   };
 }
 
+function profileLoginOptions(profile: Profile): StationLoginOption[] {
+  const declared = (profile.loginVoiceOptions ?? []).filter(
+    (option): option is StationLoginOption =>
+      (option === 'BROWSER' && profile.webRtcEnabled === true) ||
+      option === 'EXTENSION' ||
+      option === 'AGENT_DN',
+  );
+  if (declared.length) return Array.from(new Set(declared));
+
+  // Older profiles may omit loginVoiceOptions even when extension login is available.
+  return profile.webRtcEnabled ? ['BROWSER', 'EXTENSION'] : ['EXTENSION'];
+}
+
 export class WebexPocController {
   private snapshot: ControllerSnapshot = structuredClone(initialSnapshot);
   private listeners = new Set<SnapshotListener>();
@@ -123,30 +138,14 @@ export class WebexPocController {
 
   async initialize(options: InitializeOptions): Promise<void> {
     if (!options.accessToken.trim()) throw new Error('Complete Webex OAuth first.');
-    if (!options.extension.trim()) throw new Error('A Calling extension is required.');
 
     this.setLifecycle('initializing', 'Initializing');
     this.update({
       error: '',
-      extension: options.extension.trim(),
-      endpointId: options.answerEndpoint?.id || '',
-      endpointName: options.answerEndpoint?.name || 'Primary device fallback',
-      lineStatus: options.answerEndpoint
-        ? options.answerEndpoint.status === 'CONNECTED'
-          ? 'Selected endpoint registered'
-          : 'Selected endpoint ready'
-        : 'Primary device fallback',
+      lineStatus: 'Connecting to Contact Center',
     });
     this.log('Initializing Webex Contact Center with the OAuth session.');
-    reportBackendEvent('cc.initialize', 'started', {
-      hasAnswerEndpoint: Boolean(options.answerEndpoint?.id),
-    });
-    this.log(
-      options.answerEndpoint
-        ? `Preferred Webex App endpoint selected: ${options.answerEndpoint.name}.`
-        : 'No endpoint preference selected; Webex will use its configured device routing.',
-      options.answerEndpoint ? 'success' : 'warning',
-    );
+    reportBackendEvent('cc.initialize', 'started');
 
     try {
       const {default: Webex} = await import('@webex/contact-center');
@@ -177,6 +176,7 @@ export class WebexPocController {
       this.profile = profile;
       const teams = normalizeTeams(profile.teams);
       const recovered = recoveredAgentSession(profile);
+      const loginVoiceOptions = profileLoginOptions(profile);
       const selectedTeamId =
         teams.find((team) => team.id === recovered.teamId)?.id ?? teams[0]?.id ?? '';
       if (!selectedTeamId) throw new Error('No usable assigned team was returned for this agent.');
@@ -194,7 +194,11 @@ export class WebexPocController {
         selectedWrapupCode: profile.defaultWrapupCode || profile.wrapupCodes[0]?.id || '',
         idleCodes,
         selectedIdleCode: recovered.idleCodeId || defaultIdleCode?.id || '',
-        extension: recovered.extension || options.extension.trim(),
+        stationLoginOption: recovered.deviceType,
+        stationDialNumber: recovered.dialNumber,
+        loginVoiceOptions,
+        webRtcEnabled: profile.webRtcEnabled === true,
+        lineStatus: recovered.loggedIn ? 'Station connected' : 'Ready for station login',
       });
       this.log(`Contact Center registered for ${profile.agentName}.`, 'success');
       if (recovered.loggedIn) {
@@ -233,21 +237,64 @@ export class WebexPocController {
     this.update({selectedWrapupCode: codeId});
   }
 
-  async stationLogin(): Promise<void> {
+  async stationLogin(options: StationLoginOptions): Promise<void> {
     if (!this.cc || !this.profile) throw new Error('Initialize Contact Center first.');
     if (!this.snapshot.selectedTeamId) throw new Error('Select an agent team.');
-    reportBackendEvent('cc.station_login', 'started');
+    if (!this.snapshot.loginVoiceOptions.includes(options.loginOption)) {
+      throw new Error('This station login method is not enabled for the agent profile.');
+    }
+    if (options.loginOption === 'BROWSER' && !this.snapshot.webRtcEnabled) {
+      throw new Error('Desktop calling is not enabled for this Contact Center organization.');
+    }
+    const dialNumber = options.dialNumber?.trim() ?? '';
+    if (options.loginOption !== 'BROWSER' && !dialNumber) {
+      throw new Error(
+        options.loginOption === 'EXTENSION'
+          ? 'Select or enter a Webex Calling extension.'
+          : 'Enter the dial number that should receive Contact Center calls.',
+      );
+    }
+
+    reportBackendEvent('cc.station_login', 'started', {deviceType: options.loginOption});
     try {
-      await this.cc.stationLogin({
+      const response = await this.cc.stationLogin({
         teamId: this.snapshot.selectedTeamId,
-        loginOption: 'EXTENSION',
-        dialNumber: this.snapshot.extension,
+        loginOption: options.loginOption,
+        ...(options.loginOption === 'BROWSER' ? {} : {dialNumber}),
+      });
+      const stationDialNumber = String(response?.dn || dialNumber);
+      const endpointName =
+        options.loginOption === 'BROWSER'
+          ? 'This browser'
+          : options.loginOption === 'AGENT_DN'
+            ? 'Dial number'
+            : options.answerEndpoint?.name || 'Webex Calling device';
+      this.update({
+        stationLoginOption: options.loginOption,
+        stationDialNumber,
+        endpointId: options.loginOption === 'EXTENSION' ? options.answerEndpoint?.id || '' : '',
+        endpointName,
+        lineStatus:
+          options.loginOption === 'BROWSER'
+            ? 'Browser audio registered'
+            : options.loginOption === 'AGENT_DN'
+              ? 'Dial number connected'
+              : options.answerEndpoint?.status === 'CONNECTED'
+                ? 'Webex endpoint registered'
+                : 'Webex extension connected',
       });
       this.setLifecycle('station-logged-in', 'Idle');
-      this.log(`Station logged in with extension ${this.snapshot.extension}.`, 'success');
-      reportBackendEvent('cc.station_login', 'succeeded');
+      this.log(
+        options.loginOption === 'BROWSER'
+          ? 'Station logged in with browser audio.'
+          : options.loginOption === 'AGENT_DN'
+            ? 'Station logged in with a dial number.'
+            : 'Station logged in with a Webex Calling extension.',
+        'success',
+      );
+      reportBackendEvent('cc.station_login', 'succeeded', {deviceType: options.loginOption});
     } catch (error) {
-      reportBackendEvent('cc.station_login', 'failed');
+      reportBackendEvent('cc.station_login', 'failed', {deviceType: options.loginOption});
       this.fail('Station login failed', error);
     }
   }
@@ -295,14 +342,14 @@ export class WebexPocController {
 
   async answer(): Promise<void> {
     if (!this.task || !this.snapshot.acceptCapable) {
-      throw new Error('The Contact Center task is not ready to be answered on Webex App.');
+      throw new Error('The Contact Center task is not ready to be answered on this station.');
     }
     this.update({callStatus: 'answering', error: ''});
     reportBackendEvent('cc.webex_call_control', 'started', {action: 'accept'});
     try {
       await this.task.accept();
       this.update({...taskControlState(this.task)});
-      this.log('Call accepted on Webex App through the Contact Center SDK.', 'success');
+      this.log('Call accepted through the Contact Center SDK.', 'success');
       reportBackendEvent('cc.webex_call_control', 'succeeded', {action: 'accept'});
     } catch (error) {
       this.update({callStatus: 'ringing', ...taskControlState(this.task)});
@@ -318,7 +365,7 @@ export class WebexPocController {
     reportBackendEvent('cc.webex_call_control', 'started', {action: 'decline'});
     try {
       await this.task.decline();
-      this.log('Call declined on Webex App through the Contact Center SDK.', 'success');
+      this.log('Call declined through the Contact Center SDK.', 'success');
       reportBackendEvent('cc.webex_call_control', 'succeeded', {action: 'decline'});
       this.clearCallState();
     } catch (error) {
@@ -336,8 +383,13 @@ export class WebexPocController {
     reportBackendEvent('cc.webex_call_control', 'started', {action});
     try {
       await this.task.toggleMute({muted: targetMuted});
-      this.update({muted: this.task.getWxAppMuted?.() ?? targetMuted});
-      this.log(action === 'mute' ? 'Webex App muted.' : 'Webex App unmuted.', 'success');
+      this.update({
+        muted:
+          this.snapshot.stationLoginOption === 'BROWSER'
+            ? targetMuted
+            : this.task.getWxAppMuted?.() ?? targetMuted,
+      });
+      this.log(action === 'mute' ? 'Call muted.' : 'Call unmuted.', 'success');
       reportBackendEvent('cc.webex_call_control', 'succeeded', {action});
     } catch (error) {
       reportBackendEvent('cc.webex_call_control', 'failed', {action});
@@ -376,7 +428,7 @@ export class WebexPocController {
         ...taskControlState(this.task),
       });
       this.log(
-        action === 'hold' ? 'Webex App call held.' : 'Webex App call resumed.',
+        action === 'hold' ? 'Call held.' : 'Call resumed.',
         'success',
       );
       reportBackendEvent('cc.webex_call_control', 'succeeded', {action});
@@ -622,6 +674,7 @@ export class WebexPocController {
         consultDestinationName: '',
         destinations: [],
         destinationsLoaded: false,
+        remoteAudioTrack: undefined,
         error: '',
       });
       this.log(`WxCC task offered: ${interactionId}.`, 'success');
@@ -663,6 +716,7 @@ export class WebexPocController {
       held: callStatus === 'held',
       consultActive: Boolean(data.isConsulted) && !(data.isConferencing || data.isConferenceInProgress),
       conferenceActive: Boolean(data.isConferencing || data.isConferenceInProgress),
+      remoteAudioTrack: undefined,
       error: '',
     });
     this.log(`WxCC task hydrated after session recovery (${state || 'active'}).`, 'success');
@@ -679,6 +733,12 @@ export class WebexPocController {
     task.on('task:wxapp-mute-state-updated', (event: {muted?: boolean}) => {
       if (this.task === task && typeof event?.muted === 'boolean') {
         this.update({muted: event.muted});
+      }
+    });
+    task.on('task:media', (track: MediaStreamTrack) => {
+      if (this.task === task && track?.kind === 'audio') {
+        this.update({remoteAudioTrack: track});
+        this.log('Browser call audio is connected.', 'success');
       }
     });
 
@@ -754,6 +814,7 @@ export class WebexPocController {
       destinations: [],
       destinationsLoaded: false,
       activeTask: undefined,
+      remoteAudioTrack: undefined,
     });
   }
 }

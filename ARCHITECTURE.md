@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-The application provides a consolidated agent interface for Webex Contact Center voice interactions delivered to a Webex Calling extension.
+The application provides a consolidated agent interface for Webex Contact Center voice interactions delivered through Webex App, native browser WebRTC, or an agent dial number.
 
 The design separates interaction control from media control:
 
@@ -10,8 +10,8 @@ The design separates interaction control from media control:
 - The Contact Center SDK's Webex App Better Together path owns answer, decline, mute, unmute, and DTMF through the public task contract.
 - Contact Center task operations own hold, resume, and end.
 - Direct Webex Calling APIs are used only during setup for profile, extension, device, and preferred-endpoint configuration.
-- Webex App remains the registered endpoint and carries audio.
-- The browser coordinates both systems but does not become a media endpoint.
+- The registered agent profile determines which station login modes are available.
+- Webex App carries audio for extension login, the browser carries audio for WebRTC login, and the configured phone carries audio for dial-number login.
 
 ## 2. System context
 
@@ -25,6 +25,8 @@ flowchart LR
     WxCC["Webex Contact Center services"]
     Calling["Webex Calling services"]
     App["Webex App endpoint"]
+    Phone["Agent dial-number endpoint"]
+    BrowserMedia["Browser WebRTC media"]
 
     Agent --> UI
     UI --> SDK
@@ -35,6 +37,8 @@ flowchart LR
     Server <--> Calling
     Calling <--> App
     WxCC --> App
+    WxCC <--> Phone
+    SDK <--> BrowserMedia
 ```
 
 The Contact Center SDK connects directly from the browser to Webex services, routes supported controls to the Webex App call, and owns task-state synchronization. Calling configuration requests are sent through the same-origin Express server so the OAuth refresh token and integration secret do not enter the browser bundle.
@@ -43,8 +47,8 @@ The Contact Center SDK connects directly from the browser to Webex services, rou
 
 | Component | Responsibilities |
 |---|---|
-| `App.tsx` | Workflow composition, form state, one responsive desktop/mobile UI, in-call next-state selection, consult/conference participant views, banners, menus, theme and alert controls |
-| `WebexPocController.ts` | Contact Center lifecycle, native task controls, task and conference events, state machine, and action coordination |
+| `App.tsx` | Workflow composition, profile-driven station-mode selection, WebRTC permission and remote-audio binding, one responsive desktop/mobile UI, in-call next-state selection, consult/conference views, banners, menus, theme and alert controls |
+| `WebexPocController.ts` | Contact Center lifecycle, three-mode station login, native task controls, browser media events, task and conference events, state machine, and action coordination |
 | `server.mjs` | OAuth, token refresh, HTTP-only session cookie, Calling configuration proxy, diagnostics ingestion, static hosting |
 | `callingApi.ts` | Typed same-origin client for server routes |
 | `stationConfiguration.ts` | Extension and endpoint normalization and selection policy |
@@ -95,7 +99,7 @@ flowchart TB
 
 - Current OAuth access token returned by `/api/oauth/status` for SDK initialization
 - UI state and active SDK objects in memory
-- Recovery hint in `sessionStorage`: extension and answer-endpoint metadata
+- Recovery hint in `sessionStorage`: station mode, applicable dial number or extension, and Webex App answer-endpoint metadata
 - Theme preference in `localStorage`
 - HTTP-only session cookie, inaccessible to JavaScript
 
@@ -156,15 +160,23 @@ sequenceDiagram
     UI->>SDK: Initialize with OAuth access token and enableWxBetterTogether
     SDK->>W: Register and load agent profile
     W-->>SDK: Teams, codes, capabilities, session state
-    SDK-->>UI: Registered profile
-    UI->>SDK: Station login with team, EXTENSION, dial number
-    SDK->>W: Station login
+    SDK-->>UI: Registered profile with loginVoiceOptions and webRtcEnabled
+    UI->>UI: Present profile-enabled connection modes
+    alt Webex App
+        UI->>SDK: stationLogin with EXTENSION and extension
+    else Native browser audio
+        UI->>UI: Request microphone permission
+        UI->>SDK: stationLogin with BROWSER
+    else Dial number
+        UI->>SDK: stationLogin with AGENT_DN and dial number
+    end
+    SDK->>W: Station login and applicable media registration
     W-->>UI: Login and agent-state events
 ```
 
 Teams are normalized because observed SDK payloads may use either `id`/`name` or `teamId`/`teamName`.
 
-The endpoint selection policy prefers an existing valid preference, then a single connected application endpoint, then a single usable endpoint. Ambiguous endpoint sets require user selection.
+`loginVoiceOptions` gates the three UI connection cards. `webRtcEnabled` additionally gates browser audio. The endpoint selection policy applies only to Webex App mode and prefers an existing valid preference, then a single connected application endpoint, then a single usable endpoint. Ambiguous endpoint sets require user selection. `AGENT_DN` is validated by the SDK against the agent profile dial plan.
 
 ## 7. Incoming call sequence
 
@@ -174,15 +186,22 @@ sequenceDiagram
     participant SDK as Contact Center SDK
     participant UI as Controller and UI
     participant C as Calling services
-    participant A as Webex App
+    participant M as Selected media endpoint
 
     W-->>SDK: task:incoming
     SDK-->>UI: ITask with interactionId and caller metadata
     SDK-->>UI: uiControls.main.accept and decline
     UI->>SDK: task.accept()
-    SDK->>C: Internally answer task Webex App call
-    C->>A: Answer Webex App endpoint
-    C-->>SDK: Result
+    alt EXTENSION
+        SDK->>C: Internally answer Webex App call
+        C->>M: Answer registered Webex endpoint
+    else BROWSER
+        SDK->>M: Obtain microphone and answer WebRTC call
+        SDK-->>UI: task:media remote audio track
+        UI->>M: Attach track to autoplay audio element
+    else AGENT_DN
+        W->>M: Ring and connect configured phone
+    end
     SDK-->>UI: Task result and UI-control updates
     W-->>SDK: task:established
     SDK-->>UI: Connected task state
@@ -206,6 +225,7 @@ The UI treats the SDK task as the single source of truth for the active interact
 - `task:ui-controls-updated` refreshes capability state.
 - `task:established`, `task:hold`, and `task:resume` determine the connected and held presentation.
 - `task:wxapp-mute-state-updated` synchronizes Webex App mute state.
+- `task:media` supplies the remote audio track for browser WebRTC calls.
 - `task:end`, `task:wrapup`, and `task:wrappedup` determine completion and cleanup.
 - `task:hydrate` restores the task and controls after refresh.
 
@@ -232,7 +252,7 @@ There is no application-owned Calling call-control proxy.
 These operations execute directly through the SDK:
 
 - Register and deregister
-- Station login and station logout
+- Station login using `BROWSER`, `EXTENSION`, or `AGENT_DN`, and station logout
 - Agent state changes
 - Webex App answer and decline through `task.accept()` and `task.decline()`
 - Webex App mute and DTMF through `task.toggleMute({muted})` and `task.transmitDtmf({dtmf})`
@@ -243,7 +263,7 @@ These operations execute directly through the SDK:
 - Consult conference and conference exit
 - Wrap-up
 
-The controller initializes `cc.enableWxBetterTogether: true`, reads `task.uiControls` for action availability, listens for `task:ui-controls-updated`, and synchronizes mute from `task:wxapp-mute-state-updated`. The internal SDK helper names are not called by the application.
+The controller initializes `cc.enableWxBetterTogether: true`, reads `task.uiControls` for action availability, listens for `task:ui-controls-updated`, synchronizes Webex App mute from `task:wxapp-mute-state-updated`, and forwards browser remote audio from `task:media`. The internal SDK helper names are not called by the application.
 
 ### Consult and conference path
 
@@ -322,7 +342,9 @@ conferenceActive
 
 ## 11. Responsive UI state
 
-Desktop and mobile use the same React component tree, controller snapshot, and action handlers. CSS breakpoints reflow the top bar, state selector, call-control grid, consult actions, conference controls, and participant rows; there is no separate mobile application or duplicate SDK session.
+Desktop and mobile use the same React component tree, controller snapshot, and action handlers. CSS breakpoints reflow the top bar, station-mode cards, station details, state selector, call-control grid, consult actions, conference controls, and participant rows; there is no separate mobile application or duplicate SDK session.
+
+Station setup deliberately has two progressive views rather than a persistent stepper. OAuth completion leads to one Contact Center connection action. After registration, the UI displays three recognizable connection cards and only the fields relevant to the selected mode. Unsupported profile modes remain visible but disabled so agents understand that the capability is controlled by their assigned profile rather than missing from the application.
 
 The active-interaction heading contains an `After this call` selector. It is available for `connected` and `held` interactions, including consult and conference modes, and is disabled while ringing, answering, wrapping up, or executing another action. Selecting a value invokes the normal Contact Center agent-state API; Webex Contact Center remains authoritative for the resulting agent-state event.
 
@@ -336,7 +358,7 @@ sequenceDiagram
     participant SDK as Contact Center SDK
     participant W as Contact Center services
 
-    UI->>SS: Read extension and endpoint recovery hint
+    UI->>SS: Read station mode, number, and endpoint recovery hint
     UI->>S: GET /api/oauth/status
     S-->>UI: Current access token
     UI->>SDK: Initialize with automated relogin enabled
@@ -380,7 +402,7 @@ Station and Contact Center task operations bypass Express. This includes answer,
 POST /api/diagnostics/events
 ```
 
-The endpoint requires a valid session and same-origin request. Event name, outcome, state, action, destination type, booleans, and counts are allowlisted. Unknown fields are discarded.
+The endpoint requires a valid session and same-origin request. Event name, outcome, state, action, station device type, destination type, booleans, and counts are allowlisted. Unknown fields are discarded.
 
 ### Log schema
 
@@ -407,7 +429,10 @@ Conference start and exit report the allowlisted `cc.conference` diagnostic even
 | OAuth session missing | Server returns 401 and records `auth.session_required` |
 | OAuth state mismatch | Callback is rejected before token exchange |
 | Profile lookup failure | OAuth remains usable; UI shows a profile warning |
-| Extension discovery failure | Manual extension entry remains available |
+| Extension discovery failure | Webex App mode retains manual extension entry; browser and dial-number modes remain unaffected |
+| Browser microphone blocked | Station login stops before WebRTC registration and the UI explains how to retry after changing site permission |
+| Browser remote audio blocked | The application records an essential console error; the agent can restore site autoplay permission and retry the call |
+| Unsupported station mode | The option remains visible but disabled based on `loginVoiceOptions` and `webRtcEnabled` |
 | Contact Center initialization failure | Lifecycle becomes `error`; banner and backend diagnostic are emitted |
 | No assigned team | Initialization fails with an explicit error |
 | Station login failure | Existing configuration remains available for retry |
