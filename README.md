@@ -184,7 +184,7 @@ When `profile.aiFeature.realtimeTranscripts.enable` is true, the console explici
 
 The transcript path remains profile-gated. If the SDK registration profile does not advertise real-time transcription, the UI states that explicitly and does not send an unsupported request. See the [Webex Contact Center task transcription contract](https://developer.webex.com/webex-contact-center/docs/sdks/webex-contact-center-web-sdk-tasks#real-time-transcriptions).
 
-After Contact Center registration, the controller resolves the SDK-discovered regional `wcc-api-gateway` and asks the same-origin server for current-day performance. The server validates the regional Webex hostname and time window, refreshes the OAuth token when necessary, and posts a `taskDetails` aggregation to `/search`. The query uses `endedTime`, telephony media, and the registered profile's `agentId` to return:
+After Contact Center registration, the controller resolves the SDK-discovered regional `wcc-api-gateway` and asks the same-origin server for current-day performance. The server validates the regional Webex hostname and time window, refreshes the OAuth token when necessary, and posts a `taskDetails` aggregation to `/search`. The query uses `endedTime`, telephony media, and the registered profile's `agentId`; it also groups the response by `lastAgent.id` and accepts metrics only when that returned ID matches the requested agent. This prevents an unscoped or team-wide response from being presented as agent performance. The verified response returns:
 
 - completed interactions where the user was the last handling agent;
 - average connected duration;
@@ -397,7 +397,7 @@ The test suite covers team normalization, station configuration, custom selector
 ```text
 server.mjs                    OAuth server, Calling and GraphQL proxies, static host, structured logs
 src/App.tsx                   Agent-console UI and workflow composition
-src/WebexPocController.ts     Contact Center task and Webex App control orchestration
+src/WebexController.ts     Contact Center task and Webex App control orchestration
 src/callingApi.ts             Same-origin browser API client and response types
 src/stationConfiguration.ts   Extension and endpoint selection policy
 src/sessionRecovery.ts        Same-tab recovery hint and profile-state mapping

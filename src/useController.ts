@@ -1,8 +1,8 @@
 import {useEffect, useMemo, useState} from 'react';
-import {WebexPocController} from './WebexPocController';
+import {WebexController} from './WebexController';
 
 export function useController() {
-  const controller = useMemo(() => new WebexPocController(), []);
+  const controller = useMemo(() => new WebexController(), []);
   const [snapshot, setSnapshot] = useState(controller.getSnapshot());
 
   useEffect(() => controller.subscribe(setSnapshot), [controller]);

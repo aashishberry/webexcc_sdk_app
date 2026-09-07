@@ -167,6 +167,41 @@ function collectAssistantText(value: unknown, depth = 0): string[] {
         .flatMap(([, entry]) => collectAssistantText(entry, depth + 1));
 }
 
+function collectNamedSummaryValues(value: unknown, depth = 0): unknown[] {
+  if (depth > 7 || value == null || typeof value !== 'object') return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectNamedSummaryValues(entry, depth + 1));
+  }
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, entry]) =>
+    /summary|summaries|summarization/i.test(key)
+      ? [entry]
+      : collectNamedSummaryValues(entry, depth + 1),
+  );
+}
+
+function summarySectionLabel(key: string): string {
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .toLowerCase();
+  return words.replace(/^./, (character) => character.toUpperCase());
+}
+
+function collectSummarySections(value: unknown, depth = 0): string[] {
+  if (depth > 7 || value == null || typeof value !== 'object') return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectSummarySections(entry, depth + 1));
+  }
+  const record = value as Record<string, unknown>;
+  if (record.sections && typeof record.sections === 'object' && !Array.isArray(record.sections)) {
+    return Object.entries(record.sections as Record<string, unknown>).flatMap(([key, entry]) => {
+      const content = collectAssistantText(entry).find((candidate) => candidate.length > 2);
+      return content ? [`${summarySectionLabel(key)}: ${content}`] : [];
+    });
+  }
+  return Object.values(record).flatMap((entry) => collectSummarySections(entry, depth + 1));
+}
+
 function aiSuggestion(payload: any): AiSuggestion | undefined {
   const data = payload?.data ?? payload;
   const content = collectAssistantText(data).find((value) => value.length > 2) ?? '';
@@ -181,6 +216,12 @@ function aiSuggestion(payload: any): AiSuggestion | undefined {
 }
 
 function aiSummary(payload: any): string {
+  const sections = collectSummarySections(payload);
+  if (sections.length) return sections.join('\n\n');
+  const namedContent = collectNamedSummaryValues(payload)
+    .flatMap((value) => collectAssistantText(value))
+    .filter((value, index, all) => value.length > 2 && all.indexOf(value) === index);
+  if (namedContent.length) return namedContent.join('\n\n');
   return collectAssistantText(payload).find((value) => value.length > 2) ?? '';
 }
 
@@ -256,7 +297,7 @@ function profileLoginOptions(profile: Profile): StationLoginOption[] {
   return profile.webRtcEnabled ? ['BROWSER', 'EXTENSION'] : ['EXTENSION'];
 }
 
-export class WebexPocController {
+export class WebexController {
   private snapshot: ControllerSnapshot = structuredClone(initialSnapshot);
   private listeners = new Set<SnapshotListener>();
   private webex: any;
@@ -276,12 +317,30 @@ export class WebexPocController {
       const payload = typeof event === 'string' ? JSON.parse(event) : event;
       const interactionId = firstText(
         payload?.data?.data?.conversationId,
+        payload?.data?.data?.interactionId,
         payload?.data?.conversationId,
+        payload?.data?.interactionId,
+        payload?.eventDetails?.data?.conversationId,
+        payload?.eventDetails?.data?.interactionId,
         payload?.conversationId,
+        payload?.interactionId,
       );
       if (!interactionId || interactionId !== this.task?.data.interactionId) return;
 
-      const type = firstText(payload?.type, payload?.eventName);
+      const type = firstText(
+        payload?.type,
+        payload?.eventName,
+        payload?.data?.type,
+        payload?.data?.eventName,
+        payload?.data?.notifType,
+        payload?.data?.notifDetails?.actionEvent,
+        payload?.data?.data?.type,
+        payload?.data?.data?.eventName,
+        payload?.eventDetails?.type,
+        payload?.eventDetails?.eventName,
+        payload?.eventDetails?.data?.type,
+        payload?.eventDetails?.data?.eventName,
+      );
       if (type === 'SUGGESTED_RESPONSE_ACKNOWLEDGE') {
         this.update({
           aiAssistanceStatus: 'accepted',
@@ -291,9 +350,9 @@ export class WebexPocController {
       }
 
       if (type === 'MID_CALL_SUMMARY' || type === 'MID_CALL_SUMMARY_RESPONSE') {
-        this.receiveSummary('mid-call', payload?.data ?? payload);
+        this.receiveSummary('mid-call', payload);
       } else if (type === 'POST_CALL_SUMMARY' || type === 'POST_CALL_SUMMARY_RESPONSE') {
-        this.receiveSummary('post-call', payload?.data ?? payload);
+        this.receiveSummary('post-call', payload);
       }
     } catch {
       // The SDK owns parsing and diagnostics for unrelated RTD messages.

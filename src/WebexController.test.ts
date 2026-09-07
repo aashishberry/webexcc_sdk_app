@@ -1,6 +1,6 @@
 import {describe, expect, it, vi} from 'vitest';
 import type {ITask, Profile} from '@webex/contact-center';
-import {WebexPocController} from './WebexPocController';
+import {WebexController} from './WebexController';
 
 const {getAgentPerformanceMock} = vi.hoisted(() => ({
   getAgentPerformanceMock: vi.fn(),
@@ -60,17 +60,18 @@ function fakeTask(wrapUpRequired: boolean): FakeTask {
   return task as unknown as FakeTask;
 }
 
-function observeTask(controller: WebexPocController, task: ITask): void {
+function observeTask(controller: WebexController, task: ITask): void {
   const internal = controller as unknown as {attachTaskListeners: (candidate: ITask) => void};
   internal.attachTaskListeners(task);
 }
 
-describe('WebexPocController performance', () => {
+describe('WebexController performance', () => {
   it('loads current-day statistics from the SDK-discovered regional service', async () => {
     getAgentPerformanceMock.mockResolvedValueOnce({
       available: true,
       performance: {
         source: 'graphql-search',
+        scope: 'agent',
         from: 1,
         to: 2,
         handled: 7,
@@ -79,7 +80,7 @@ describe('WebexPocController performance', () => {
         averageWrapupSeconds: 14,
       },
     });
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const serviceGet = vi.fn(() => 'https://api.wxcc-us1.cisco.com/v1');
     const internal = controller as unknown as {
       webex: {internal: {services: {get: typeof serviceGet}}};
@@ -109,7 +110,7 @@ describe('WebexPocController performance', () => {
       reason: 'authorization',
       message: 'Performance statistics require a Supervisor role.',
     });
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const internal = controller as unknown as {
       webex: {internal: {services: {get: () => string}}};
       profile: Profile;
@@ -138,6 +139,7 @@ describe('WebexPocController performance', () => {
       available: true,
       performance: {
         source: 'graphql-search',
+        scope: 'agent',
         from: 1,
         to: 2,
         handled: 8,
@@ -146,7 +148,7 @@ describe('WebexPocController performance', () => {
         averageWrapupSeconds: 12,
       },
     });
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(false);
     const internal = controller as unknown as {
       webex: {internal: {services: {get: () => string}}};
@@ -169,12 +171,12 @@ describe('WebexPocController performance', () => {
   });
 });
 
-describe('WebexPocController station login', () => {
+describe('WebexController station login', () => {
   it.each([
     ['EXTENSION', '4093'],
     ['AGENT_DN', '+14085550100'],
   ] as const)('passes %s and its dial number to the SDK', async (loginOption, dialNumber) => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const stationLogin = vi.fn(async () => ({dn: dialNumber}));
     const internal = controller as unknown as {
       cc: {stationLogin: typeof stationLogin};
@@ -203,7 +205,7 @@ describe('WebexPocController station login', () => {
   });
 
   it('logs in with browser audio without sending a dial number', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const stationLogin = vi.fn(async () => ({deviceType: 'BROWSER'}));
     const internal = controller as unknown as {
       cc: {stationLogin: typeof stationLogin};
@@ -233,9 +235,9 @@ describe('WebexPocController station login', () => {
   });
 });
 
-describe('WebexPocController task completion', () => {
+describe('WebexController task completion', () => {
   it('enables wrap-up when task:end reports wrapUpRequired', () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(true);
 
     observeTask(controller, task);
@@ -246,7 +248,7 @@ describe('WebexPocController task completion', () => {
   });
 
   it('clears a completed task when task:end does not require wrap-up', () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(false);
 
     observeTask(controller, task);
@@ -257,7 +259,7 @@ describe('WebexPocController task completion', () => {
   });
 
   it('uses the Contact Center task end event to enter wrap-up', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(true);
     const internal = controller as unknown as {
       task: ITask;
@@ -281,9 +283,9 @@ describe('WebexPocController task completion', () => {
   });
 });
 
-describe('WebexPocController transcription', () => {
+describe('WebexController transcription', () => {
   it('explicitly starts transcript streaming when an enabled task is assigned', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(false);
     const sendEvent = vi.fn(async () => ({}));
     const internal = controller as unknown as {
@@ -329,7 +331,7 @@ describe('WebexPocController transcription', () => {
   });
 
   it('does not start streaming when the registered profile disables transcription', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(false);
     const sendEvent = vi.fn(async () => ({}));
     const internal = controller as unknown as {
@@ -350,9 +352,9 @@ describe('WebexPocController transcription', () => {
   });
 });
 
-describe('WebexPocController AI response lifecycle', () => {
+describe('WebexController AI response lifecycle', () => {
   it('distinguishes an accepted assistance request from a received suggestion', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(false);
     const getRealTimeAssistance = vi.fn(async () => ({}));
     const internal = controller as unknown as {
@@ -384,7 +386,7 @@ describe('WebexPocController AI response lifecycle', () => {
   });
 
   it('accepts summary requests and consumes the declared raw RTD summary event', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(false);
     const sendEvent = vi.fn(async () => ({}));
     const internal = controller as unknown as {
@@ -416,12 +418,39 @@ describe('WebexPocController AI response lifecycle', () => {
       aiSummaryStatus: 'received',
       midCallSummary: 'Customer asked about the current plan.',
     });
+
+    internal.handleRawAIEvent(JSON.stringify({
+      type: 'MID_CALL_SUMMARY',
+      data: {
+        data: {
+          adaptiveCard: {
+            id: 'card-2',
+            type: 'AdaptiveCard',
+            version: '1.6',
+          },
+          conversationId: 'interaction-1',
+          sections: {
+            additionalContext: 'Customer needs a billing correction.',
+            keyActionsTaken: 'The agent reviewed the current invoice.',
+            reasonForTransferOrConsult: 'A billing specialist should confirm the adjusted total.',
+          },
+        },
+        notifDetails: {actionEvent: 'MID_CALL_SUMMARY'},
+        notifType: 'MID_CALL_SUMMARY',
+      },
+    }));
+    expect(controller.getSnapshot()).toMatchObject({
+      aiSummaryStatus: 'received',
+      midCallSummary: expect.stringMatching(
+        /Additional context: Customer needs a billing correction[\s\S]*Key actions taken:[\s\S]*Reason for transfer or consult:/,
+      ),
+    });
   });
 });
 
-describe('WebexPocController idle reasons', () => {
+describe('WebexController idle reasons', () => {
   it('uses the idle reason selected by the agent', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const setAgentState = vi.fn(async () => undefined);
     const internal = controller as unknown as {
       cc: {setAgentState: typeof setAgentState};
@@ -446,7 +475,7 @@ describe('WebexPocController idle reasons', () => {
   });
 
   it('does not allow system-managed idle reasons to be selected', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const internal = controller as unknown as {
       cc: {setAgentState: ReturnType<typeof vi.fn>};
       profile: Profile;
@@ -463,9 +492,9 @@ describe('WebexPocController idle reasons', () => {
   });
 });
 
-describe('WebexPocController call controls', () => {
+describe('WebexController call controls', () => {
   it('answers a Webex App offer through the Contact Center task', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(false);
     const internal = controller as unknown as {
       task: ITask;
@@ -492,7 +521,7 @@ describe('WebexPocController call controls', () => {
   });
 
   it('declines a Webex App offer through the Contact Center task', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(false);
     const internal = controller as unknown as {
       task: ITask;
@@ -509,7 +538,7 @@ describe('WebexPocController call controls', () => {
   });
 
   it('mutes and sends DTMF through the Contact Center task', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(false);
     const internal = controller as unknown as {
       task: ITask;
@@ -532,7 +561,7 @@ describe('WebexPocController call controls', () => {
   });
 
   it('holds and resumes through the Contact Center task', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(false);
     const internal = controller as unknown as {
       task: ITask;
@@ -550,7 +579,7 @@ describe('WebexPocController call controls', () => {
   });
 
   it('synchronizes mute changes emitted by the Webex App SDK path', () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(false);
     const internal = controller as unknown as {
       task: ITask;
@@ -565,7 +594,7 @@ describe('WebexPocController call controls', () => {
   });
 
   it('exposes WebRTC remote audio from the task media event', () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(false);
     const track = {kind: 'audio'} as MediaStreamTrack;
     const internal = controller as unknown as {
@@ -580,7 +609,7 @@ describe('WebexPocController call controls', () => {
   });
 
   it('maps active-leg consult and conference capabilities from SDK UI controls', () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(false);
     const internal = controller as unknown as {task: ITask};
     internal.task = task;
@@ -614,7 +643,7 @@ describe('WebexPocController call controls', () => {
   });
 
   it('stores live transcript updates by message ID', () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const task = fakeTask(false);
     const internal = controller as unknown as {task: ITask};
     internal.task = task;
@@ -633,7 +662,7 @@ describe('WebexPocController call controls', () => {
   });
 
   it('uses the Contact Center task for recording controls', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const pauseRecording = vi.fn(async () => undefined);
     const resumeRecording = vi.fn(async () => undefined);
     const internal = controller as unknown as {
@@ -656,7 +685,7 @@ describe('WebexPocController call controls', () => {
   });
 
   it('merges an active consultation into a conference', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const consultConference = vi.fn(async () => undefined);
     const internal = controller as unknown as {
       task: ITask;
@@ -673,7 +702,7 @@ describe('WebexPocController call controls', () => {
   });
 
   it('exits an active conference through the Contact Center task', async () => {
-    const controller = new WebexPocController();
+    const controller = new WebexController();
     const exitConference = vi.fn(async () => undefined);
     const internal = controller as unknown as {
       task: ITask;

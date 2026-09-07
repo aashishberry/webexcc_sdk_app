@@ -3,6 +3,7 @@
 import {cleanup, fireEvent, render, screen} from '@testing-library/react';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {SelectMenu} from './SelectMenu';
+import {menuViewportShift} from './selectMenuPosition';
 
 const options = [
   {value: 'available', label: 'Available'},
@@ -13,6 +14,12 @@ const options = [
 afterEach(cleanup);
 
 describe('SelectMenu', () => {
+  it('shifts a menu back inside either viewport edge', () => {
+    expect(menuViewportShift({left: -32, right: 198}, 320)).toBe(40);
+    expect(menuViewportShift({left: 130, right: 350}, 320)).toBe(-38);
+    expect(menuViewportShift({left: 40, right: 270}, 320)).toBe(0);
+  });
+
   it('visually distinguishes the selected option', () => {
     render(
       <SelectMenu

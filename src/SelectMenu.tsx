@@ -1,4 +1,5 @@
-import {useEffect, useId, useRef, useState, type KeyboardEvent} from 'react';
+import {useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent} from 'react';
+import {menuViewportShift} from './selectMenuPosition';
 
 export interface SelectMenuOption {
   value: string;
@@ -28,6 +29,7 @@ export function SelectMenu({
 }: SelectMenuProps) {
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
+  const popover = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const selectedIndex = options.findIndex((option) => option.value === value);
   const firstEnabledIndex = options.findIndex((option) => !option.disabled);
@@ -44,6 +46,19 @@ export function SelectMenu({
     document.addEventListener('pointerdown', closeOnOutsideClick);
     return () => document.removeEventListener('pointerdown', closeOnOutsideClick);
   }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open || !popover.current) return;
+    const keepInsideViewport = () => {
+      if (!popover.current) return;
+      popover.current.style.translate = '0 0';
+      const shift = menuViewportShift(popover.current.getBoundingClientRect(), window.innerWidth);
+      popover.current.style.translate = shift ? `${shift}px 0` : '';
+    };
+    keepInsideViewport();
+    window.addEventListener('resize', keepInsideViewport);
+    return () => window.removeEventListener('resize', keepInsideViewport);
+  }, [open, options.length]);
 
   const openMenu = () => {
     if (disabled || options.length === 0) return;
@@ -108,7 +123,7 @@ export function SelectMenu({
       </button>
 
       {open && (
-        <div id={`${id}-listbox`} className="select-menu-popover" role="listbox">
+        <div ref={popover} id={`${id}-listbox`} className="select-menu-popover" role="listbox">
           {options.map((option, index) => {
             const showGroup = Boolean(
               option.group && option.group !== options[index - 1]?.group,

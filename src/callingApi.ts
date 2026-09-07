@@ -52,7 +52,7 @@ export type AgentPerformanceResponse =
   | {available: true; performance: AgentPerformanceSummary}
   | {
       available: false;
-      reason: 'authorization' | 'query-rejected';
+      reason: 'authorization' | 'query-rejected' | 'scope-unverified';
       message: string;
     };
 

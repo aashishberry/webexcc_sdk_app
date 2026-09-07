@@ -239,7 +239,19 @@ export function App() {
   const hasCall = snapshot.callStatus !== 'none';
   const wrapupActive = snapshot.callStatus === 'wrap-up';
   const stateChangeDisabled =
-    busy !== '' || wrapupActive || ['ringing', 'answering'].includes(snapshot.callStatus);
+    busy !== '' || ['ringing', 'answering'].includes(snapshot.callStatus);
+  const queuedIdleState = snapshot.agentState !== 'Available'
+    ? snapshot.idleCodes.find((code) => code.id === snapshot.selectedIdleCode)?.name || snapshot.agentState
+    : '';
+  const withQueuedState = (label: string) =>
+    queuedIdleState ? `${label} · ${queuedIdleState} next` : label;
+  const interactionPresence = ['ringing', 'answering'].includes(snapshot.callStatus)
+    ? {value: 'interaction:reserved', label: withQueuedState('Reserved'), className: 'is-reserved'}
+    : snapshot.callStatus === 'wrap-up'
+      ? {value: 'interaction:wrap-up', label: withQueuedState('Pending wrap-up'), className: 'is-wrapup'}
+      : ['connected', 'held'].includes(snapshot.callStatus)
+        ? {value: 'interaction:engaged', label: withQueuedState('Engaged'), className: 'is-engaged'}
+        : undefined;
   const selectedTeam = snapshot.teams.find((team) => team.id === snapshot.selectedTeamId);
   const headerStatus = sessionStatus(snapshot.lifecycle, snapshot.agentState);
   const extensionOptions = configuredExtensions(callingConfiguration);
@@ -281,6 +293,14 @@ export function App() {
     label: team.name,
   }));
   const stateMenuOptions: SelectMenuOption[] = [
+    ...(interactionPresence
+      ? [{
+          value: interactionPresence.value,
+          label: interactionPresence.label,
+          disabled: true,
+          group: 'Current interaction',
+        }]
+      : []),
     {value: 'available', label: 'Available'},
     ...(selectableIdleCodes.length === 0 ? [{value: 'idle', label: 'Idle'}] : []),
     ...selectableIdleCodes.map((code) => ({
@@ -350,12 +370,20 @@ export function App() {
     : `${stationLoggedIn ? stationConnectionLabel : 'Contact Center ready'}${
         stationLoggedIn && selectedTeam ? ` · ${selectedTeam.name}` : ''
       }`;
-  const stateValue = snapshot.agentState === 'Available'
+  const routingStateValue = snapshot.agentState === 'Available'
     ? 'available'
     : snapshot.selectedIdleCode
       ? `idle:${snapshot.selectedIdleCode}`
       : 'idle';
-  const stateElapsed = clock && snapshot.stateChangedAt ? formatElapsed(clock - snapshot.stateChangedAt) : '0:00';
+  const stateValue = interactionPresence?.value ?? routingStateValue;
+  const displayedStateStartedAt = snapshot.callStatus === 'wrap-up'
+    ? snapshot.wrapupStartedAt
+    : interactionPresence
+      ? snapshot.callStartedAt
+      : snapshot.stateChangedAt;
+  const stateElapsed = clock && displayedStateStartedAt
+    ? formatElapsed(clock - displayedStateStartedAt)
+    : '0:00';
   const callElapsed = clock && snapshot.callStartedAt
     ? formatElapsed((snapshot.callEndedAt || clock) - snapshot.callStartedAt)
     : '0:00';
@@ -444,6 +472,12 @@ export function App() {
     setRouteMode(mode);
     setRouteTaskId(snapshot.interactionId);
     setDestinationId('');
+    if (
+      !snapshot.midCallSummary &&
+      !['requesting', 'accepted', 'received'].includes(snapshot.aiSummaryStatus)
+    ) {
+      void controller.requestSummary('mid-call').catch(() => undefined);
+    }
     if (!snapshot.destinationsLoaded) {
       await run('destinations', () => controller.loadDestinations());
     }
@@ -538,7 +572,7 @@ export function App() {
         </div>
         <div className="session-actions">
           {stationLoggedIn ? (
-            <div className={`state-pill ${snapshot.agentState === 'Available' ? 'is-available' : 'is-idle'}`}>
+            <div className={`state-pill ${interactionPresence?.className ?? (snapshot.agentState === 'Available' ? 'is-available' : 'is-idle')}`}>
               <span className="state-dot" aria-hidden="true" />
               <SelectMenu
                 ariaLabel="Agent state"
@@ -597,7 +631,7 @@ export function App() {
             onClick={() => setDiagnosticsOpen((open) => !open)}
           >
             <ControlIcon name="activity" />
-            <span>Diagnostics</span>
+            <span>Open Diag</span>
           </button>
           <button
             className="button logout-button"
@@ -882,7 +916,7 @@ export function App() {
                   <section className="performance-section" aria-labelledby="performance-title">
                     <div className="performance-heading">
                       <div>
-                        <p className="section-kicker">My performance</p>
+                        <p className="section-kicker">Agent performance</p>
                         <h3 id="performance-title">Today</h3>
                       </div>
                       <button
@@ -929,7 +963,7 @@ export function App() {
                       </div>
                     )}
                     <p className="performance-caption">
-                      Completed telephony interactions where you were the last handling agent. Times use your local day.
+                      Verified for the signed-in agent: completed telephony interactions where you were the last handler. Times use your local day.
                     </p>
                   </section>
                 </div>

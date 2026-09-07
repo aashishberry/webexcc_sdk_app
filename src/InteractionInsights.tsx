@@ -1,12 +1,12 @@
 import {useEffect, useRef, useState} from 'react';
-import type {WebexPocController} from './WebexPocController';
+import type {WebexController} from './WebexController';
 import type {ControllerSnapshot} from './types';
 
 type InsightTab = 'context' | 'transcript' | 'assist' | 'summary' | 'stats';
 
 interface InteractionInsightsProps {
   snapshot: ControllerSnapshot;
-  controller: WebexPocController;
+  controller: WebexController;
   busy: string;
   run: (name: string, action: () => void | Promise<void>) => Promise<void>;
 }
@@ -260,7 +260,7 @@ function StatisticsView({snapshot, controller, busy}: InteractionInsightsProps) 
     <div className="insight-content statistics-view">
       <div className="performance-heading">
         <div>
-          <p className="section-kicker">My performance</p>
+          <p className="section-kicker">Agent performance</p>
           <h3>Today</h3>
         </div>
         <button
@@ -306,7 +306,7 @@ function StatisticsView({snapshot, controller, busy}: InteractionInsightsProps) 
         </div>
       )}
       <p className="performance-caption">
-        Completed telephony interactions where you were the last handling agent. Times use your local day.
+        Verified for the signed-in agent: completed telephony interactions where you were the last handler. Times use your local day.
       </p>
     </div>
   );

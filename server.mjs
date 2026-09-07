@@ -213,6 +213,9 @@ const agentPerformanceQuery = `
       ]
     ) {
       tasks {
+        lastAgent {
+          id
+        }
         aggregation {
           name
           value
@@ -256,11 +259,14 @@ function reportingWindow(from, to) {
   return {from, to};
 }
 
-function aggregationValues(payload) {
+function aggregationValues(payload, agentId) {
   const tasks = payload?.data?.taskDetails?.tasks;
   const values = new Map();
-  if (!Array.isArray(tasks)) return values;
+  if (!Array.isArray(tasks)) return {values, scopeVerified: false};
+  let scopeVerified = tasks.length === 0;
   for (const task of tasks) {
+    if (task?.lastAgent?.id !== agentId) return {values: new Map(), scopeVerified: false};
+    scopeVerified = true;
     if (!Array.isArray(task?.aggregation)) continue;
     for (const aggregation of task.aggregation) {
       if (typeof aggregation?.name !== 'string') continue;
@@ -268,7 +274,7 @@ function aggregationValues(payload) {
       if (Number.isFinite(value)) values.set(aggregation.name, value);
     }
   }
-  return values;
+  return {values, scopeVerified};
 }
 
 function reportingUnavailable(response, reason, message) {
@@ -569,10 +575,23 @@ app.post(
         return;
       }
 
-      const values = aggregationValues(payload);
+      const {values, scopeVerified} = aggregationValues(payload, agentId);
+      if (!scopeVerified) {
+        logServer('warn', 'reporting.agent_performance', request, {
+          outcome: 'unavailable',
+          reason: 'scope_unverified',
+        });
+        reportingUnavailable(
+          response,
+          'scope-unverified',
+          'The reporting response could not be verified as agent-specific.',
+        );
+        return;
+      }
       const millisecondsToSeconds = (value) => Math.max(0, value || 0) / 1000;
       const performance = {
         source: 'graphql-search',
+        scope: 'agent',
         ...window,
         handled: Math.max(0, Math.round(values.get('handled') || 0)),
         averageConnectedSeconds: millisecondsToSeconds(values.get('averageConnectedDuration')),

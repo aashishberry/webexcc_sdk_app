@@ -77,6 +77,7 @@ export interface AiSuggestion {
 
 export interface AgentPerformanceSummary {
   source: 'graphql-search';
+  scope: 'agent';
   from: number;
   to: number;
   handled: number;
