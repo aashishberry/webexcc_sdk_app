@@ -9,6 +9,7 @@ interface InteractionInsightsProps {
   controller: WebexController;
   busy: string;
   run: (name: string, action: () => void | Promise<void>) => Promise<void>;
+  summaryFocusRequest: number;
 }
 
 function labelForRole(role: string): string {
@@ -313,10 +314,27 @@ function StatisticsView({snapshot, controller, busy}: InteractionInsightsProps) 
 }
 
 export function InteractionInsights(props: InteractionInsightsProps) {
-  const {snapshot} = props;
+  const {snapshot, summaryFocusRequest} = props;
   const [tab, setTab] = useState<InsightTab>(
-    snapshot.aiSummaryStatus === 'idle' ? 'transcript' : 'summary',
+    snapshot.callStatus === 'wrap-up' || snapshot.callStatus === 'ended' || snapshot.aiSummaryStatus !== 'idle'
+      ? 'summary'
+      : 'transcript',
   );
+  const previousSummaryFocusRequest = useRef(summaryFocusRequest);
+  const previousCallStatus = useRef(snapshot.callStatus);
+
+  useEffect(() => {
+    if (summaryFocusRequest === previousSummaryFocusRequest.current) return;
+    previousSummaryFocusRequest.current = summaryFocusRequest;
+    setTab('summary');
+  }, [summaryFocusRequest]);
+
+  useEffect(() => {
+    const wasPostCall = previousCallStatus.current === 'wrap-up' || previousCallStatus.current === 'ended';
+    const isPostCall = snapshot.callStatus === 'wrap-up' || snapshot.callStatus === 'ended';
+    previousCallStatus.current = snapshot.callStatus;
+    if (isPostCall && !wasPostCall) setTab('summary');
+  }, [snapshot.callStatus]);
 
   const tabs: Array<{id: InsightTab; label: string; count?: number}> = [
     {id: 'transcript', label: 'Transcript', count: snapshot.transcripts.length},

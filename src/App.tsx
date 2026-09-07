@@ -83,6 +83,7 @@ export function App() {
   const [routeMode, setRouteMode] = useState<'consult' | 'transfer' | ''>('');
   const [routeTaskId, setRouteTaskId] = useState('');
   const [destinationId, setDestinationId] = useState('');
+  const [summaryFocusRequest, setSummaryFocusRequest] = useState(0);
   const [participantsOpen, setParticipantsOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [clock, setClock] = useState(0);
@@ -239,6 +240,8 @@ export function App() {
   const hasCall = snapshot.callStatus !== 'none';
   const wrapupActive = snapshot.callStatus === 'wrap-up';
   const consultConnecting = snapshot.consultStatus === 'connecting';
+  const consultInitiatedByAgent =
+    snapshot.consultActive && snapshot.activeTask?.data?.isConsulted !== true;
   const stateChangeDisabled =
     busy !== '' || ['ringing', 'answering'].includes(snapshot.callStatus);
   const queuedIdleState = snapshot.agentState !== 'Available'
@@ -484,6 +487,7 @@ export function App() {
     setRouteMode(mode);
     setRouteTaskId(snapshot.interactionId);
     setDestinationId('');
+    setSummaryFocusRequest((request) => request + 1);
     if (
       !snapshot.midCallSummary &&
       !['requesting', 'accepted', 'received'].includes(snapshot.aiSummaryStatus)
@@ -1072,35 +1076,25 @@ export function App() {
                               <span className="participant-avatar">{snapshot.consultDestinationName.charAt(0) || 'A'}</span>
                               <div>
                                 <strong>{snapshot.consultDestinationName || 'Consult destination'}</strong>
-                                <span>{snapshot.consultDestinationType === 'queue' ? 'Consult queue' : 'Consult agent'}</span>
+                                <span>
+                                  {snapshot.consultDestinationType === 'queue' ? 'Consult queue' : 'Consult agent'} · {consultConnecting ? 'Waiting' : 'Connected'}
+                                </span>
                               </div>
-                              <span className={consultConnecting ? 'pending-chip' : 'connected-chip'}>
-                                {consultConnecting ? 'Waiting' : 'Connected'}
-                              </span>
+                              {consultInitiatedByAgent ? (
+                                <button
+                                  type="button"
+                                  className="drop-participant consult-drop-button"
+                                  disabled={busy !== '' || (!consultConnecting && !snapshot.endConsultCapable)}
+                                  onClick={() => run(consultConnecting ? 'cancel-consult' : 'end-consult', () => controller.endConsult())}
+                                >
+                                  <ControlIcon name="phone" /> {consultConnecting ? 'Cancel' : 'Drop'}
+                                </button>
+                              ) : (
+                                <span className={consultConnecting ? 'pending-chip' : 'connected-chip'}>
+                                  {consultConnecting ? 'Waiting' : 'Connected'}
+                                </span>
+                              )}
                             </div>
-                          </div>
-                          <div className={`consult-action-row ${consultConnecting ? 'pending-consult-actions' : ''}`}>
-                            {consultConnecting ? (
-                              <button className="button danger-outline" disabled={busy !== ''} onClick={() => run('cancel-consult', () => controller.endConsult())}>
-                                <ControlIcon name="close" /> Cancel consult
-                              </button>
-                            ) : <>
-                            <button className="button secondary" disabled={busy !== '' || !snapshot.switchCapable} onClick={() => run('switch-call', () => controller.switchCall())}>
-                              <ControlIcon name="switch" /> Switch to {snapshot.activeLeg === 'consult' ? 'customer' : 'consult'}
-                            </button>
-                            <button className="button secondary" disabled={busy !== '' || !snapshot.endConsultCapable} onClick={() => run('end-consult', () => controller.endConsult())}>
-                              End consult
-                            </button>
-                            <button className="button conference-button" disabled={busy !== '' || !snapshot.conferenceCapable} onClick={() => {
-                              setParticipantsOpen(false);
-                              void run('conference', () => controller.startConference());
-                            }}>
-                              <ControlIcon name="conference" /> Conference
-                            </button>
-                            <button className="button primary" disabled={busy !== '' || !snapshot.consultTransferCapable} onClick={() => run('consult-transfer', () => controller.completeConsultTransfer())}>
-                              Complete transfer
-                            </button>
-                            </>}
                           </div>
                         </div>
                       )}
@@ -1167,12 +1161,13 @@ export function App() {
         </section>
 
         {stationLoggedIn && activeInteraction && (
-            <InteractionInsights
-              key={`${snapshot.interactionId}:${snapshot.aiSummaryStatus}`}
-              snapshot={snapshot}
+          <InteractionInsights
+            key={snapshot.interactionId}
+            snapshot={snapshot}
             controller={controller}
             busy={busy}
             run={run}
+            summaryFocusRequest={summaryFocusRequest}
           />
         )}
 
@@ -1218,6 +1213,83 @@ export function App() {
                   <small>{busy === 'decline' ? 'Declining…' : 'Decline'}</small>
                 </button>
               </div>
+            ) : consultInitiatedByAgent ? (
+              <>
+                {dialpadOpen && (
+                  <div className="dock-popover dialpad-popover">
+                    <div id="dtmf-dialpad" className="dialpad" aria-label="DTMF dial pad">
+                      {digits.map((digit) => (
+                        <button
+                          key={digit}
+                          disabled={busy !== '' || !snapshot.dtmfCapable}
+                          onClick={() => run(`dtmf-${digit}`, () => controller.sendDigit(digit))}
+                        >{digit}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {consultConnecting ? (
+                  <div className="consult-dock-status" role="status">
+                    Waiting for the consult destination. Use Cancel beside the destination to stop waiting.
+                  </div>
+                ) : (
+                  <div className="mobile-call-controls consult-dock-controls" aria-label="Consult controls">
+                    {snapshot.muteCapable && (
+                      <button
+                        className={`phone-control ${snapshot.muted ? 'active' : ''}`}
+                        disabled={busy !== ''}
+                        onClick={() => run('mute', () => controller.toggleMute())}
+                      >
+                        <span><ControlIcon name="mute" /></span>
+                        <small>{snapshot.muted ? 'Unmute' : 'Mute'}</small>
+                      </button>
+                    )}
+                    {snapshot.holdCapable && (
+                      <button
+                        className={`phone-control ${snapshot.held ? 'active' : ''}`}
+                        disabled={busy !== ''}
+                        onClick={() => run('hold', () => controller.toggleHold())}
+                      >
+                        <span><ControlIcon name="hold" /></span>
+                        <small>{snapshot.held ? 'Resume' : 'Hold'}</small>
+                      </button>
+                    )}
+                    {snapshot.dtmfCapable && (
+                      <button
+                        className={`phone-control ${dialpadOpen ? 'active' : ''}`}
+                        disabled={busy !== ''}
+                        aria-expanded={dialpadOpen}
+                        aria-controls="dtmf-dialpad"
+                        onClick={() => setDialpadTaskId(dialpadOpen ? '' : snapshot.interactionId)}
+                      >
+                        <span><ControlIcon name="keypad" /></span>
+                        <small>Keypad</small>
+                      </button>
+                    )}
+                    {snapshot.switchCapable && (
+                      <button className="phone-control" disabled={busy !== ''} onClick={() => run('switch-call', () => controller.switchCall())}>
+                        <span><ControlIcon name="switch" /></span>
+                        <small>Switch to {snapshot.activeLeg === 'consult' ? 'customer' : 'consult'}</small>
+                      </button>
+                    )}
+                    {snapshot.conferenceCapable && (
+                      <button className="phone-control conference-control" disabled={busy !== ''} onClick={() => {
+                        setParticipantsOpen(false);
+                        void run('conference', () => controller.startConference());
+                      }}>
+                        <span><ControlIcon name="conference" /></span>
+                        <small>Conference</small>
+                      </button>
+                    )}
+                    {snapshot.consultTransferCapable && (
+                      <button className="phone-control transfer-control" disabled={busy !== ''} onClick={() => run('consult-transfer', () => controller.completeConsultTransfer())}>
+                        <span><ControlIcon name="transfer" /></span>
+                        <small>Complete transfer</small>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </>
             ) : (
               <>
                 {dialpadOpen && (

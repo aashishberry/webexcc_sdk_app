@@ -417,7 +417,7 @@ wrap-up
 ended
 ```
 
-Contact Center task events are authoritative for call state, hold, completion, and wrap-up.
+Contact Center task events are authoritative for call state, hold, completion, and wrap-up. On hydration, the agent participant's `joinTimestamp` restores the connected-call boundary. The wrap-up timestamp, termination timestamp, or ended event time restores the end boundary, so refreshing during wrap-up neither extends the completed call nor resets the wrap-up timer.
 
 Consultation and conference are orthogonal task modes rather than additional call states:
 
@@ -437,7 +437,7 @@ callStartedAt -> callEndedAt       connected agent call duration
 wrapupStartedAt -> current clock   elapsed wrap-up time
 ```
 
-`task:assigned` resets `callStartedAt` to the current agent participant's `joinTimestamp`, so IVR, queue, and ringing time are excluded from talk duration. The wrap-up event uses the current agent participant's `wrapUpTimestamp` when available and falls back to the local observation time. Hydrated tasks restore the same participant timestamps, preventing the call clock from including pre-agent handling time or continuing during after-call work.
+`task:assigned` resets `callStartedAt` to the current agent participant's `joinTimestamp`, so IVR, queue, and ringing time are excluded from talk duration. The wrap-up event uses the current agent participant's `wrapUpTimestamp` when available and then the backend termination or ended-event timestamp. Hydrated tasks restore the same backend boundaries, preventing the call clock from including pre-agent handling time or continuing during after-call work.
 
 ## 11. Responsive UI state
 
@@ -447,7 +447,7 @@ Station setup deliberately has two progressive views rather than a persistent st
 
 The top bar contains a persistent agent-state selector and time-in-state display. It remains available for connected and held interactions, including consult and conference modes, and during pending wrap-up so the agent can select the next idle reason. It is disabled while ringing, answering, or executing another action. Selecting a value invokes the normal Contact Center agent-state API; Webex Contact Center remains authoritative for the resulting agent-state event. During wrap-up, the interaction header retains the frozen call duration and displays a separate after-call-work timer.
 
-The active interaction uses a stable-width two-column desktop layout: a compact caller/lifecycle rail and a large conversation workspace where Transcript opens by default beside Assist, Summary, Statistics, and Call details tabs. The outer console and top bar retain the same aligned width across idle, ringing, connected, and wrap-up states. Incoming, connected-call, consult/transfer destination, keypad, and wrap-up actions use one bottom dock spanning both columns. Transient destination and keypad panels are positioned above the dock and their selectors open upward. At tablet and mobile breakpoints the same components stack vertically and the control dock becomes sticky with a three-column control grid. There is no separate mobile application, SDK instance, or navigation rail.
+The active interaction uses a stable-width two-column desktop layout: a compact caller/lifecycle rail and a large conversation workspace where Transcript opens by default beside Assist, Summary, Statistics, and Call details tabs. The outer console and top bar retain the same aligned width across idle, ringing, connected, and wrap-up states. Incoming, connected-call, consult/transfer destination, keypad, and wrap-up actions use one bottom dock spanning both columns. While the current agent owns an active consult, the dock renders only SDK-enabled active-leg and consult actions; the caller rail retains participant status and the additional destination's Cancel/Drop action. A consulted agent continues to receive its normal SDK-derived controls. Transient destination and keypad panels are positioned above the dock and their selectors open upward. At tablet and mobile breakpoints the same components stack vertically and the control dock becomes sticky with a three-column control grid. There is no separate mobile application, SDK instance, or navigation rail.
 
 The idle workspace renders the optional `AgentPerformanceSummary` as a four-card responsive grid. Loading uses a compact skeleton, manual refresh does not block agent-state or station controls, and unavailable reporting remains an inline secondary state. The same component collapses from four to two columns on mobile.
 

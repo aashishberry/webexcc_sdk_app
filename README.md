@@ -166,9 +166,11 @@ npm start
 
 Conference rows are reconstructed only while the SDK participant map is unavailable. Reconstructed rows cannot be removed. As soon as task data supplies authoritative participant IDs, the console enables participant removal for non-host participants and delegates the action to `task.dropConferenceParticipant()`.
 
+Recovered tasks use the agent participant's backend `joinTimestamp` for the call start and the backend wrap-up, termination, or ended-event timestamp for the call end. Refreshing during wrap-up therefore preserves both the completed call duration and elapsed wrap-up duration.
+
 ## Interaction insights and AI
 
-The active interaction uses a compact caller rail beside a large conversation workspace. Transcript opens by default and follows new utterances while the agent remains at the bottom; scrolling up pauses follow mode and shows a New transcript control. Incoming, connected-call, consult/transfer destination, keypad, and wrap-up actions share a bottom dock. Destination and keypad controls open as upward dock popovers so short viewports do not place them behind the controls. At tablet and mobile widths the caller rail and conversation workspace stack, while the same control dock becomes sticky and uses a three-column grid.
+The active interaction uses a compact caller rail beside a large conversation workspace. Transcript opens by default and follows new utterances while the agent remains at the bottom; scrolling up pauses follow mode and shows a New transcript control. Incoming, connected-call, consult/transfer destination, keypad, and wrap-up actions share a bottom dock. During an initiator-owned consult, unavailable standard controls are replaced by the SDK-enabled active-leg controls such as mute, hold, keypad, switch, conference, and complete transfer. The caller rail keeps participant context and places the consult Cancel/Drop action directly on the added destination. Destination and keypad controls open as upward dock popovers so short viewports do not place them behind the controls. At tablet and mobile widths the caller rail and conversation workspace stack, while the same control dock becomes sticky and uses a three-column grid.
 
 The conversation workspace exposes five views:
 

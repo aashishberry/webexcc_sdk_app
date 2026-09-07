@@ -263,38 +263,59 @@ function epochMilliseconds(value: unknown): number {
   return timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
 }
 
-function taskWrapupStartedAt(task: ITask, agentId = ''): number {
+function taskAgentParticipant(task: ITask, agentId = ''): Record<string, any> | undefined {
   const data = (task.data ?? {}) as unknown as Record<string, any>;
+  const participantAgentIds = [agentId, String(data.agentId ?? '')].filter(Boolean);
   const participants = Object.entries(data.interaction?.participants ?? {}) as Array<
     [string, Record<string, any>]
   >;
-  const currentAgent = participants.find(([id, participant]) =>
-    id === agentId ||
-    participant.id === agentId ||
-    participant.participantId === agentId ||
-    participant.agentId === agentId,
+  return participants.find(([id, participant]) =>
+    participantAgentIds.some((candidate) =>
+      id === candidate ||
+      participant.id === candidate ||
+      participant.participantId === candidate ||
+      participant.agentId === candidate,
+    ),
   )?.[1];
-  return epochMilliseconds(currentAgent?.wrapUpTimestamp);
+}
+
+function taskWrapupStartedAt(task: ITask, agentId = ''): number {
+  const participant = taskAgentParticipant(task, agentId);
+  const participantState = String(participant?.currentState ?? '').toLowerCase();
+  return (
+    epochMilliseconds(participant?.wrapUpTimestamp) ||
+    (participant?.isWrapUp === true || participantState.includes('wrap')
+      ? epochMilliseconds(participant?.currentStateTimestamp)
+      : 0)
+  );
 }
 
 function taskConnectedAt(task: ITask, agentId = ''): number {
-  const data = (task.data ?? {}) as unknown as Record<string, any>;
-  const participantAgentId = agentId || String(data.agentId ?? '');
-  const participants = Object.entries(data.interaction?.participants ?? {}) as Array<
-    [string, Record<string, any>]
-  >;
-  const currentAgent = participants.find(([id, participant]) =>
-    id === participantAgentId ||
-    participant.id === participantAgentId ||
-    participant.participantId === participantAgentId ||
-    participant.agentId === participantAgentId,
-  )?.[1];
-  return epochMilliseconds(currentAgent?.joinTimestamp);
+  return epochMilliseconds(taskAgentParticipant(task, agentId)?.joinTimestamp);
 }
 
 function taskEventAt(task: ITask): number {
   const data = (task.data ?? {}) as unknown as Record<string, any>;
   return epochMilliseconds(data.eventTime);
+}
+
+function taskEndedAt(task: ITask, agentId = ''): number {
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
+  const interaction = data.interaction ?? {};
+  const participant = taskAgentParticipant(task, agentId);
+  return (
+    taskWrapupStartedAt(task, agentId) ||
+    epochMilliseconds(interaction.terminatedTimestamp) ||
+    epochMilliseconds(interaction.terminationTimestamp) ||
+    epochMilliseconds(interaction.endedTimestamp) ||
+    epochMilliseconds(interaction.endTimestamp) ||
+    epochMilliseconds(data.terminatedTimestamp) ||
+    epochMilliseconds(data.terminationTimestamp) ||
+    epochMilliseconds(data.endedTimestamp) ||
+    epochMilliseconds(data.endTimestamp) ||
+    taskEventAt(task) ||
+    epochMilliseconds(participant?.lastUpdated)
+  );
 }
 
 function taskActiveLegHeld(task: ITask): boolean | undefined {
@@ -1401,7 +1422,12 @@ export class WebexController {
           : state.includes('hold')
             ? 'held'
             : 'connected';
-    const wrapupStartedAt = wrapup ? taskWrapupStartedAt(task, this.profile?.agentId) || Date.now() : 0;
+    const endedAt = terminated
+      ? taskEndedAt(task, this.profile?.agentId) || Date.now()
+      : 0;
+    const wrapupStartedAt = wrapup
+      ? taskWrapupStartedAt(task, this.profile?.agentId) || endedAt
+      : 0;
     const context = interactionContext(task);
     const connectedAt = taskConnectedAt(task, this.profile?.agentId);
     const conferenceActive = Boolean(data.isConferencing || data.isConferenceInProgress);
@@ -1443,7 +1469,7 @@ export class WebexController {
       activeTask: task,
       interactionId: task.data.interactionId,
       callStartedAt: connectedAt || taskEventAt(task) || Date.now(),
-      callEndedAt: terminated ? wrapupStartedAt || Date.now() : 0,
+      callEndedAt: endedAt,
       queueDurationMs: context.queuedAt && connectedAt
         ? Math.max(0, connectedAt - context.queuedAt)
         : 0,
@@ -1816,7 +1842,10 @@ export class WebexController {
       this.receiveSummary('post-call', payload);
     });
     task.on('task:wrapup', () => {
-      const startedAt = taskWrapupStartedAt(task, this.profile?.agentId) || Date.now();
+      const startedAt =
+        taskWrapupStartedAt(task, this.profile?.agentId) ||
+        taskEndedAt(task, this.profile?.agentId) ||
+        Date.now();
       this.stopTranscription(task);
       this.update({
         callStatus: 'wrap-up',
@@ -1834,7 +1863,7 @@ export class WebexController {
     task.on('task:end', (endedTask?: ITask) => {
       const currentTask = endedTask ?? task;
       this.task = currentTask;
-      const endedAt = taskWrapupStartedAt(currentTask, this.profile?.agentId) || Date.now();
+      const endedAt = taskEndedAt(currentTask, this.profile?.agentId) || Date.now();
       this.stopTranscription(currentTask);
 
       if (currentTask.data.wrapUpRequired) {

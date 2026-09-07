@@ -478,6 +478,43 @@ describe('WebexController interaction timing', () => {
       queueDurationMs: 35_000,
     });
   });
+
+  it('restores ended call and wrap-up timing from backend timestamps instead of refresh time', () => {
+    const controller = new WebexController();
+    const task = fakeTask(true);
+    const assignedAt = 1_788_790_043_000;
+    const endedAt = assignedAt + 125_000;
+    Object.assign((task as any).data, {
+      agentId: 'agent-1',
+      eventTime: endedAt,
+      interaction: {
+        state: 'connected',
+        isTerminated: true,
+        participants: {
+          'agent-1': {
+            id: 'agent-1',
+            hasJoined: true,
+            isWrapUp: true,
+            joinTimestamp: assignedAt,
+          },
+        },
+      },
+    });
+    const internal = controller as unknown as {
+      profile: Profile;
+      restoreHydratedTask: (candidate: ITask) => void;
+    };
+    internal.profile = {agentId: 'agent-1'} as Profile;
+
+    internal.restoreHydratedTask(task);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'wrap-up',
+      callStartedAt: assignedAt,
+      callEndedAt: endedAt,
+      wrapupStartedAt: endedAt,
+    });
+  });
 });
 
 describe('WebexController transcription', () => {
