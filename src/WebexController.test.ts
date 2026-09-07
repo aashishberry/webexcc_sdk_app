@@ -18,6 +18,8 @@ type FakeTask = ITask & {
   hold: ReturnType<typeof vi.fn>;
   resume: ReturnType<typeof vi.fn>;
   end: ReturnType<typeof vi.fn>;
+  consult: ReturnType<typeof vi.fn>;
+  endConsult: ReturnType<typeof vi.fn>;
   toggleMute: ReturnType<typeof vi.fn>;
   transmitDtmf: ReturnType<typeof vi.fn>;
 };
@@ -42,6 +44,8 @@ function fakeTask(wrapUpRequired: boolean): FakeTask {
     hold: vi.fn(async () => undefined),
     resume: vi.fn(async () => undefined),
     end: vi.fn(async () => undefined),
+    consult: vi.fn(async () => undefined),
+    endConsult: vi.fn(async () => undefined),
     toggleMute: vi.fn(async ({muted: target}: {muted: boolean}) => {
       muted = target;
     }),
@@ -284,7 +288,95 @@ describe('WebexController task completion', () => {
     expect(controller.getSnapshot()).toMatchObject({
       callStatus: 'connected',
       consultActive: false,
+      consultStatus: 'none',
       consultDestinationName: '',
+    });
+  });
+
+  it('replaces the consult offer controls when the consulted agent connects', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    (task.uiControls as any).activeLeg = 'main';
+    (task.uiControls as any).main.accept = {isVisible: false, isEnabled: false};
+    (task.uiControls as any).main.decline = {isVisible: false, isEnabled: false};
+    Object.assign((task.data as any), {
+      isConsulted: true,
+      interaction: {
+        state: 'consulting',
+        mainInteractionId: 'interaction-1',
+        media: {'interaction-1': {mediaResourceId: 'interaction-1', isHold: false}},
+      },
+    });
+    internal.update({
+      activeTask: task,
+      callStatus: 'ringing',
+      acceptCapable: true,
+      declineCapable: true,
+    });
+    observeTask(controller, task);
+
+    task.emitTest('task:consultAccepted');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'connected',
+      consultActive: true,
+      consultStatus: 'connected',
+      held: false,
+      acceptCapable: false,
+      declineCapable: false,
+    });
+  });
+
+  it('restores the held main leg after a consultation ends', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    (task.uiControls as any).activeLeg = 'consult';
+    (task.uiControls as any).consult = {
+      ...((task.uiControls as any).main),
+      hold: {isVisible: false, isEnabled: false},
+    };
+    (task.uiControls as any).main.hold = {isVisible: true, isEnabled: true};
+    Object.assign((task.data as any), {
+      consultMediaResourceId: 'consult-1',
+      interaction: {
+        state: 'hold',
+        mainInteractionId: 'interaction-1',
+        media: {
+          'interaction-1': {mediaResourceId: 'interaction-1', mType: 'mainCall', isHold: true},
+          'consult-1': {mediaResourceId: 'consult-1', mType: 'consult', isHold: false},
+        },
+      },
+    });
+    internal.update({
+      activeTask: task,
+      callStatus: 'connected',
+      consultActive: true,
+      consultDestinationName: 'Agent Two',
+      held: false,
+    });
+    observeTask(controller, task);
+
+    task.emitTest('task:consultEnd');
+    (task.uiControls as any).activeLeg = 'main';
+    task.emitTest('task:ui-controls-updated');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'held',
+      consultActive: false,
+      consultStatus: 'none',
+      consultDestinationName: '',
+      held: true,
+      holdCapable: true,
     });
   });
 
@@ -853,6 +945,65 @@ describe('WebexController call controls', () => {
     expect(consultConference).toHaveBeenCalledOnce();
     expect(controller.getSnapshot().consultActive).toBe(false);
     expect(controller.getSnapshot().conferenceActive).toBe(true);
+  });
+
+  it('cancels a pending queue consultation with the destination queue ID', async () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.update({
+      activeTask: task,
+      destinations: [{id: 'queue-7', name: 'Support queue', type: 'queue'}],
+    });
+
+    await controller.consult('queue-7');
+    await controller.endConsult();
+
+    expect(task.consult).toHaveBeenCalledWith({
+      to: 'queue-7',
+      destinationType: 'queue',
+      holdParticipants: true,
+    });
+    expect(task.endConsult).toHaveBeenCalledWith({
+      isConsult: true,
+      taskId: 'interaction-1',
+      queueId: 'queue-7',
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      consultActive: false,
+      consultStatus: 'none',
+      consultDestinationId: '',
+      consultDestinationType: '',
+      consultDestinationName: '',
+    });
+  });
+
+  it('ends a connected consultation without the pending queue cancellation field', async () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.update({
+      activeTask: task,
+      consultActive: true,
+      consultStatus: 'connected',
+      consultDestinationId: 'queue-7',
+      consultDestinationType: 'queue',
+    });
+
+    await controller.endConsult();
+
+    expect(task.endConsult).toHaveBeenCalledWith({
+      isConsult: true,
+      taskId: 'interaction-1',
+    });
   });
 
   it('exits an active conference through the Contact Center task', async () => {

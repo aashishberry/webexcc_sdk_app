@@ -238,6 +238,7 @@ export function App() {
     ['ringing', 'answering', 'rona', 'connected', 'held', 'wrap-up'].includes(snapshot.callStatus);
   const hasCall = snapshot.callStatus !== 'none';
   const wrapupActive = snapshot.callStatus === 'wrap-up';
+  const consultConnecting = snapshot.consultStatus === 'connecting';
   const stateChangeDisabled =
     busy !== '' || ['ringing', 'answering'].includes(snapshot.callStatus);
   const queuedIdleState = snapshot.agentState !== 'Available'
@@ -400,7 +401,14 @@ export function App() {
         {id: 'agent', name: snapshot.agentName || 'You', type: 'Agent', state: 'Connected', held: false, isCurrentAgent: true},
         {id: 'customer', name: snapshot.callerName || 'Customer', type: 'Customer', state: snapshot.held ? 'Held' : 'Connected', held: snapshot.held, isCurrentAgent: false},
         ...(snapshot.consultDestinationName
-          ? [{id: 'consult', name: snapshot.consultDestinationName, type: 'Agent', state: 'Connected', held: false, isCurrentAgent: false}]
+          ? [{
+              id: 'consult',
+              name: snapshot.consultDestinationName,
+              type: snapshot.consultDestinationType === 'queue' ? 'Queue' : 'Agent',
+              state: consultConnecting ? 'Connecting' : 'Connected',
+              held: false,
+              isCurrentAgent: false,
+            }]
           : []),
       ];
 
@@ -1046,8 +1054,13 @@ export function App() {
                       {snapshot.consultActive && (
                         <div className="consult-session">
                           <div className="consult-heading">
-                            <div><span className="section-kicker">Consultation</span><strong>Private conversation connected</strong></div>
-                            <span className="live-chip"><i />Connected</span>
+                            <div>
+                              <span className="section-kicker">Consultation</span>
+                              <strong>{consultConnecting ? 'Waiting for destination to answer' : 'Private conversation connected'}</strong>
+                            </div>
+                            <span className={`live-chip ${consultConnecting ? 'is-pending' : ''}`}>
+                              <i />{consultConnecting ? 'Connecting' : 'Connected'}
+                            </span>
                           </div>
                           <div className="participant-list">
                             <div className="participant-row">
@@ -1057,11 +1070,21 @@ export function App() {
                             </div>
                             <div className="participant-row">
                               <span className="participant-avatar">{snapshot.consultDestinationName.charAt(0) || 'A'}</span>
-                              <div><strong>{snapshot.consultDestinationName || 'Connected destination'}</strong><span>Consult destination</span></div>
-                              <span className="connected-chip">Connected</span>
+                              <div>
+                                <strong>{snapshot.consultDestinationName || 'Consult destination'}</strong>
+                                <span>{snapshot.consultDestinationType === 'queue' ? 'Consult queue' : 'Consult agent'}</span>
+                              </div>
+                              <span className={consultConnecting ? 'pending-chip' : 'connected-chip'}>
+                                {consultConnecting ? 'Waiting' : 'Connected'}
+                              </span>
                             </div>
                           </div>
-                          <div className="consult-action-row">
+                          <div className={`consult-action-row ${consultConnecting ? 'pending-consult-actions' : ''}`}>
+                            {consultConnecting ? (
+                              <button className="button danger-outline" disabled={busy !== ''} onClick={() => run('cancel-consult', () => controller.endConsult())}>
+                                <ControlIcon name="close" /> Cancel consult
+                              </button>
+                            ) : <>
                             <button className="button secondary" disabled={busy !== '' || !snapshot.switchCapable} onClick={() => run('switch-call', () => controller.switchCall())}>
                               <ControlIcon name="switch" /> Switch to {snapshot.activeLeg === 'consult' ? 'customer' : 'consult'}
                             </button>
@@ -1077,6 +1100,7 @@ export function App() {
                             <button className="button primary" disabled={busy !== '' || !snapshot.consultTransferCapable} onClick={() => run('consult-transfer', () => controller.completeConsultTransfer())}>
                               Complete transfer
                             </button>
+                            </>}
                           </div>
                         </div>
                       )}

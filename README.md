@@ -137,7 +137,7 @@ npm start
 8. Change agent state to Available and handle the interaction with the task controls.
 9. During a connected call, optionally select the Available or Idle reason that should follow the interaction.
 10. Use Context, Transcript, Assist, and Summary without leaving the active interaction.
-11. Start a consultation, switch between call legs, end it, complete the transfer, or merge it into a conference.
+11. Start a consultation; cancel it while a destination queue is still waiting, or after connection switch between call legs, end it, complete the transfer, or merge it into a conference.
 12. During a conference, manage participants or hand the conference over when the SDK enables those controls.
 13. End the call, submit a wrap-up reason when required, and use Logout for ordered cleanup.
 
@@ -150,12 +150,12 @@ npm start
 | Available/Idle | Contact Center SDK | Agent-state APIs and configured auxiliary codes; the selector remains available during connected calls to establish the agent's following state |
 | Answer | Contact Center SDK task | `task.accept()` uses native WebRTC for browser login or Better Together for an eligible Webex App task; availability comes from `uiControls.main.accept` |
 | Decline | Contact Center SDK task | `task.decline()` routes internally to Webex App reject; the local offered-task view clears after success |
-| Hold/resume | Contact Center SDK task | `task.hold()` and `task.resume()`, gated by `uiControls.main.hold` and synchronized by task events |
-| Mute/unmute | Contact Center SDK task | `task.toggleMute({muted})`, gated by `uiControls.main.mute`; Webex App changes synchronize through `task:wxapp-mute-state-updated` |
-| DTMF | Contact Center SDK task | `task.transmitDtmf({dtmf})`, gated by `uiControls.main.keypad`; digits are not sent to backend diagnostics |
-| End call | Contact Center SDK task | `task.end()`, gated by `uiControls.main.end`; wrap-up remains backend-authoritative |
+| Hold/resume | Contact Center SDK task | `task.hold()` and `task.resume()`, gated by the active leg's UI control and synchronized from hold, resume, switch, and consult lifecycle events |
+| Mute/unmute | Contact Center SDK task | `task.toggleMute({muted})`, gated by the active leg's mute control; Webex App changes synchronize through `task:wxapp-mute-state-updated` |
+| DTMF | Contact Center SDK task | `task.transmitDtmf({dtmf})`, gated by the active leg's keypad control or an eligible correlated main Webex App call; digits are not sent to backend diagnostics |
+| End call | Contact Center SDK task | `task.end()`, gated by the active/main leg controls; wrap-up remains backend-authoritative |
 | Recording status and pause/resume | Contact Center SDK task | `task:recordingStarted`, paused, and resumed events drive the left-pane status; controls are available only when the task UI control permits them |
-| Consult/transfer | Contact Center SDK task | Uses eligible agents and telephony queues returned by the SDK |
+| Consult/transfer | Contact Center SDK task | Uses eligible agents and telephony queues returned by the SDK. A pending queue consult can be cancelled with `endConsult({isConsult: true, taskId, queueId})`; a connected consult omits `queueId` when it ends. |
 | Consult conference | Contact Center SDK task | `consultConference()` merges the held customer and consulted destination into a three-party conference |
 | Switch consult leg | Contact Center SDK task | `switchCall()` changes the active main/consult leg when the active leg exposes the switch control |
 | Conference participant removal | Contact Center SDK task | `dropConferenceParticipant({participantId})`, enabled only for authoritative participant IDs returned by task data |

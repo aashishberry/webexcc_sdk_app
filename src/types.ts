@@ -106,6 +106,8 @@ export type AIRequestStatus =
   | 'delayed'
   | 'error';
 
+export type ConsultStatus = 'none' | 'connecting' | 'connected';
+
 export interface ControllerSnapshot {
   lifecycle: LifecycleStatus;
   callStatus: CallStatus;
@@ -149,7 +151,10 @@ export interface ControllerSnapshot {
   transferConferenceCapable: boolean;
   activeLeg: 'main' | 'consult';
   consultActive: boolean;
+  consultStatus: ConsultStatus;
   conferenceActive: boolean;
+  consultDestinationId: string;
+  consultDestinationType: CallDestination['type'] | '';
   consultDestinationName: string;
   destinations: CallDestination[];
   destinationsLoaded: boolean;
@@ -246,7 +251,10 @@ export const initialSnapshot: ControllerSnapshot = {
   transferConferenceCapable: false,
   activeLeg: 'main',
   consultActive: false,
+  consultStatus: 'none',
   conferenceActive: false,
+  consultDestinationId: '',
+  consultDestinationType: '',
   consultDestinationName: '',
   destinations: [],
   destinationsLoaded: false,

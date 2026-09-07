@@ -69,7 +69,7 @@ function callAssociatedValue(source: unknown, ...keys: string[]): string {
 }
 
 function interactionContext(task: ITask): InteractionContext {
-  const data = task.data as unknown as Record<string, any>;
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
   const interaction = data.interaction ?? {};
   const details = interaction.callProcessingDetails ?? data.callProcessingDetails ?? {};
   const associated = interaction.callAssociatedDetails ?? interaction.callAssociatedData ?? {};
@@ -111,7 +111,7 @@ function interactionContext(task: ITask): InteractionContext {
 }
 
 function interactionParticipants(task: ITask, agentId = ''): InteractionParticipant[] {
-  const data = task.data as unknown as Record<string, any>;
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
   const interaction = data.interaction ?? {};
   const media = Object.values(interaction.media ?? {}) as Array<Record<string, any>>;
   return Object.entries(interaction.participants ?? {})
@@ -227,7 +227,7 @@ function aiSummary(payload: any): string {
 }
 
 function recordingPauseEnabled(task: ITask): boolean {
-  const data = task.data as unknown as Record<string, any>;
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
   const activeLeg = task.uiControls?.activeLeg ?? 'main';
   const control = task.uiControls?.[activeLeg]?.recording ?? task.uiControls?.main?.recording;
   if (control) return Boolean(control.isEnabled);
@@ -238,7 +238,7 @@ function recordingPauseEnabled(task: ITask): boolean {
 }
 
 function recordingActive(task: ITask): boolean {
-  const data = task.data as unknown as Record<string, any>;
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
   const details = data.interaction?.callProcessingDetails ?? data.callProcessingDetails ?? {};
   return (
     String(details.recordingStarted).toLowerCase() === 'true' ||
@@ -248,7 +248,7 @@ function recordingActive(task: ITask): boolean {
 }
 
 function recordingPaused(task: ITask): boolean {
-  const data = task.data as unknown as Record<string, any>;
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
   const details = data.interaction?.callProcessingDetails ?? data.callProcessingDetails ?? {};
   const explicitlyPaused = String(details.isPaused).toLowerCase() === 'true';
   const started = String(details.recordingStarted).toLowerCase() === 'true';
@@ -264,7 +264,7 @@ function epochMilliseconds(value: unknown): number {
 }
 
 function taskWrapupStartedAt(task: ITask, agentId = ''): number {
-  const data = task.data as unknown as Record<string, any>;
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
   const participants = Object.entries(data.interaction?.participants ?? {}) as Array<
     [string, Record<string, any>]
   >;
@@ -278,7 +278,7 @@ function taskWrapupStartedAt(task: ITask, agentId = ''): number {
 }
 
 function taskConnectedAt(task: ITask, agentId = ''): number {
-  const data = task.data as unknown as Record<string, any>;
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
   const participantAgentId = agentId || String(data.agentId ?? '');
   const participants = Object.entries(data.interaction?.participants ?? {}) as Array<
     [string, Record<string, any>]
@@ -293,8 +293,31 @@ function taskConnectedAt(task: ITask, agentId = ''): number {
 }
 
 function taskEventAt(task: ITask): number {
-  const data = task.data as unknown as Record<string, any>;
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
   return epochMilliseconds(data.eventTime);
+}
+
+function taskActiveLegHeld(task: ITask): boolean | undefined {
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
+  const interaction = data.interaction ?? {};
+  const media = interaction.media ?? {};
+  const activeLeg = task.uiControls?.activeLeg ?? 'main';
+  const mediaId = activeLeg === 'consult'
+    ? data.consultMediaResourceId
+    : interaction.mainInteractionId || data.interactionId || data.mediaResourceId;
+  const mediaEntries = Object.entries(media) as Array<[string, Record<string, any>]>;
+  const activeMedia = mediaEntries.find(([id, entry]) =>
+    (mediaId && (id === mediaId || entry.mediaResourceId === mediaId)) ||
+    entry.mType === (activeLeg === 'consult' ? 'consult' : 'mainCall'),
+  )?.[1];
+
+  if (typeof activeMedia?.isHold === 'boolean') return activeMedia.isHold;
+  if (activeLeg === 'main') {
+    const state = String(interaction.state ?? '').toLowerCase();
+    if (state === 'hold' || state === 'held') return true;
+    if (state === 'connected') return false;
+  }
+  return undefined;
 }
 
 function taskControlState(task: ITask) {
@@ -1050,7 +1073,13 @@ export class WebexController {
         destinationType: destination.type,
         holdParticipants: true,
       });
-      this.update({consultActive: true, consultDestinationName: destination.name});
+      this.syncTaskPresentation(this.task, {
+        consultActive: true,
+        consultStatus: this.snapshot.consultStatus === 'connected' ? 'connected' : 'connecting',
+        consultDestinationId: destination.id,
+        consultDestinationType: destination.type,
+        consultDestinationName: destination.name,
+      });
       this.log(`Consult started with ${destination.name}.`, 'success');
       reportBackendEvent('cc.consult', 'succeeded', {destinationType: destination.type});
     } catch (error) {
@@ -1091,7 +1120,18 @@ export class WebexController {
     }
     try {
       await this.task.consultConference();
-      this.update({consultActive: false, conferenceActive: true});
+      this.syncTaskPresentation(
+        this.task,
+        {
+          consultActive: false,
+          consultStatus: 'none',
+          conferenceActive: true,
+          consultDestinationId: '',
+          consultDestinationType: '',
+          consultDestinationName: '',
+        },
+        true,
+      );
       this.log('Consultation merged into a conference.', 'success');
       reportBackendEvent('cc.conference', 'succeeded', {action: 'start'});
     } catch (error) {
@@ -1106,7 +1146,7 @@ export class WebexController {
     }
     try {
       await this.task.switchCall();
-      this.update(taskControlState(this.task));
+      this.syncTaskPresentation(this.task, {}, true);
       this.log('Active call leg switched.', 'success');
       reportBackendEvent('cc.consult_switch', 'succeeded');
     } catch (error) {
@@ -1120,7 +1160,7 @@ export class WebexController {
     if (!participantId) throw new Error('Select a conference participant.');
     try {
       await this.task.dropConferenceParticipant({participantId});
-      this.update({participants: interactionParticipants(this.task, this.profile?.agentId)});
+      this.syncTaskPresentation(this.task, {}, true);
       this.log('Conference participant dropped.', 'success');
       reportBackendEvent('cc.conference_participant', 'succeeded', {action: 'drop'});
     } catch (error) {
@@ -1147,7 +1187,18 @@ export class WebexController {
     if (!this.task || !this.snapshot.conferenceActive) throw new Error('No active conference.');
     try {
       await this.task.exitConference();
-      this.update({conferenceActive: false, consultActive: false});
+      this.syncTaskPresentation(
+        this.task,
+        {
+          conferenceActive: false,
+          consultActive: false,
+          consultStatus: 'none',
+          consultDestinationId: '',
+          consultDestinationType: '',
+          consultDestinationName: '',
+        },
+        true,
+      );
       this.log('Agent exited the conference.', 'success');
       reportBackendEvent('cc.conference', 'succeeded', {action: 'exit'});
     } catch (error) {
@@ -1158,14 +1209,36 @@ export class WebexController {
 
   async endConsult(): Promise<void> {
     if (!this.task || !this.snapshot.consultActive) throw new Error('No active consultation.');
+    const cancellingPendingQueue =
+      this.snapshot.consultStatus === 'connecting' &&
+      this.snapshot.consultDestinationType === 'queue' &&
+      Boolean(this.snapshot.consultDestinationId);
     try {
-      await this.task.endConsult({isConsult: true, taskId: this.task.data.interactionId});
-      this.update({consultActive: false, consultDestinationName: ''});
-      this.log('Consult ended.', 'success');
-      reportBackendEvent('cc.consult_end', 'succeeded');
+      await this.task.endConsult({
+        isConsult: true,
+        taskId: this.task.data.interactionId,
+        ...(cancellingPendingQueue ? {queueId: this.snapshot.consultDestinationId} : {}),
+      });
+      this.syncTaskPresentation(
+        this.task,
+        {
+          consultActive: false,
+          consultStatus: 'none',
+          consultDestinationId: '',
+          consultDestinationType: '',
+          consultDestinationName: '',
+        },
+        true,
+      );
+      this.log(cancellingPendingQueue ? 'Pending queue consultation cancelled.' : 'Consult ended.', 'success');
+      reportBackendEvent('cc.consult_end', 'succeeded', {
+        action: cancellingPendingQueue ? 'cancel_pending_queue' : 'end_connected',
+      });
     } catch (error) {
-      reportBackendEvent('cc.consult_end', 'failed');
-      this.fail('Ending consult failed', error);
+      reportBackendEvent('cc.consult_end', 'failed', {
+        action: cancellingPendingQueue ? 'cancel_pending_queue' : 'end_connected',
+      });
+      this.fail(cancellingPendingQueue ? 'Cancelling consult failed' : 'Ending consult failed', error);
     }
   }
 
@@ -1278,7 +1351,10 @@ export class WebexController {
         recordingPauseCapable: recordingPauseEnabled(task),
         recordingPaused: recordingPaused(task),
         consultActive: false,
+        consultStatus: 'none',
         conferenceActive: false,
+        consultDestinationId: '',
+        consultDestinationType: '',
         consultDestinationName: '',
         destinations: [],
         destinationsLoaded: false,
@@ -1328,6 +1404,40 @@ export class WebexController {
     const wrapupStartedAt = wrapup ? taskWrapupStartedAt(task, this.profile?.agentId) || Date.now() : 0;
     const context = interactionContext(task);
     const connectedAt = taskConnectedAt(task, this.profile?.agentId);
+    const conferenceActive = Boolean(data.isConferencing || data.isConferenceInProgress);
+    const agentId = this.profile?.agentId || String(data.agentId ?? '');
+    const selfParticipant = interaction.participants?.[agentId];
+    const consultEnded =
+      data.type === 'AgentConsultEnded' ||
+      data.type === 'AgentConsultFailed' ||
+      selfParticipant?.consultState === 'consultCompleted';
+    const consultActive = !conferenceActive && !consultEnded && Boolean(
+      data.isConsulted ||
+      state.includes('consult') ||
+      data.consultMediaResourceId ||
+      data.type === 'AgentConsultCreated' ||
+      data.type === 'AgentConsulting' ||
+      (data.destAgentId && data.destinationType) ||
+      selfParticipant?.consultState === 'consultInitiated',
+    );
+    const consultConnected = consultActive && Boolean(
+      data.isConsulted ||
+      state.includes('consulting') ||
+      data.type === 'AgentConsulting' ||
+      selfParticipant?.consultState === 'consulting',
+    );
+    const destinationType = String(data.destinationType ?? '').toLowerCase();
+    const consultDestinationType = destinationType === 'queue' || destinationType === 'agent'
+      ? destinationType
+      : '';
+    const consultDestinationId = consultActive
+      ? this.snapshot.consultDestinationId || String(data.destAgentId ?? '')
+      : '';
+    const consultDestinationName = consultActive
+      ? this.snapshot.consultDestinationName ||
+        this.snapshot.destinations.find((destination) => destination.id === consultDestinationId)?.name ||
+        ''
+      : '';
 
     this.update({
       activeTask: task,
@@ -1349,8 +1459,14 @@ export class WebexController {
       recordingPauseCapable: recordingPauseEnabled(task),
       recordingPaused: recordingPaused(task),
       held: callStatus === 'held',
-      consultActive: Boolean(data.isConsulted) && !(data.isConferencing || data.isConferenceInProgress),
-      conferenceActive: Boolean(data.isConferencing || data.isConferenceInProgress),
+      consultActive,
+      consultStatus: consultActive ? (consultConnected ? 'connected' : 'connecting') : 'none',
+      conferenceActive,
+      consultDestinationId,
+      consultDestinationType: consultActive
+        ? this.snapshot.consultDestinationType || consultDestinationType
+        : '',
+      consultDestinationName,
       transcriptionStatus: terminated
         ? 'stopped'
         : this.snapshot.realtimeTranscriptionEnabled
@@ -1370,19 +1486,37 @@ export class WebexController {
     }
   }
 
+  private syncTaskPresentation(
+    task: ITask,
+    patch: Partial<ControllerSnapshot> = {},
+    activate = false,
+  ): void {
+    if (this.task !== task) return;
+    const shouldSyncActiveLeg =
+      activate || ['connected', 'held'].includes(this.snapshot.callStatus);
+    const authoritativeHeld = taskActiveLegHeld(task);
+    const held = authoritativeHeld ?? (activate ? false : this.snapshot.held);
+
+    this.update({
+      ...taskControlState(task),
+      ...(shouldSyncActiveLeg
+        ? {held, callStatus: held ? 'held' : 'connected'}
+        : {}),
+      recordingActive: recordingActive(task),
+      recordingPaused: recordingPaused(task),
+      interactionContext: interactionContext(task),
+      participants: interactionParticipants(task, this.profile?.agentId),
+      ...patch,
+    });
+  }
+
   private attachTaskListeners(task: ITask): void {
     if (this.observedTasks.has(task)) return;
     this.observedTasks.add(task);
 
     task.on('task:ui-controls-updated', () => {
       if (this.task === task && this.snapshot.callStatus !== 'rona') {
-        this.update({
-          ...taskControlState(task),
-          recordingActive: recordingActive(task),
-          recordingPaused: recordingPaused(task),
-          interactionContext: interactionContext(task),
-          participants: interactionParticipants(task, this.profile?.agentId),
-        });
+        this.syncTaskPresentation(task);
       }
     });
     task.on('task:wxapp-mute-state-updated', (event: {muted?: boolean}) => {
@@ -1397,29 +1531,36 @@ export class WebexController {
       }
     });
 
-    task.on('task:assigned', () => {
+    const handleAssigned = () => {
       if (this.task !== task) return;
       const connectedAt = taskConnectedAt(task, this.profile?.agentId) || taskEventAt(task) || Date.now();
-      this.update({
-        callStatus: 'connected',
-        callStartedAt: connectedAt,
-        callEndedAt: 0,
-        ...taskControlState(task),
-        recordingActive: recordingActive(task),
-        recordingPaused: recordingPaused(task),
-      });
+      this.syncTaskPresentation(
+        task,
+        {callStartedAt: connectedAt, callEndedAt: 0},
+        true,
+      );
       this.log('WxCC task assigned and connected.', 'success');
       void this.startTranscription().catch(() => undefined);
-    });
+    };
+    task.on('task:assigned', handleAssigned);
+    task.on('task:autoAnswered', handleAssigned);
+    task.on('task:offerContact', () => this.syncTaskPresentation(task));
+    task.on('task:offerConsult', () => this.syncTaskPresentation(task));
     task.on('task:rejected', (reason?: unknown) => {
       if (this.task !== task) return;
       if (!['ringing', 'answering'].includes(this.snapshot.callStatus)) {
         if (this.snapshot.consultActive) {
-          this.update({
-            consultActive: false,
-            consultDestinationName: '',
-            ...taskControlState(task),
-          });
+          this.syncTaskPresentation(
+            task,
+            {
+              consultActive: false,
+              consultStatus: 'none',
+              consultDestinationId: '',
+              consultDestinationType: '',
+              consultDestinationName: '',
+            },
+            true,
+          );
           this.log('Consult destination did not answer.', 'warning');
         }
         return;
@@ -1455,39 +1596,189 @@ export class WebexController {
       reportBackendEvent('cc.task', 'observed', {state: 'rona'});
     });
     task.on('task:hold', () =>
-      this.update({held: true, callStatus: 'held', ...taskControlState(task)}),
+      this.syncTaskPresentation(task, {held: true, callStatus: 'held'}, true),
     );
     task.on('task:resume', () =>
-      this.update({held: false, callStatus: 'connected', ...taskControlState(task)}),
+      this.syncTaskPresentation(task, {held: false, callStatus: 'connected'}, true),
     );
     task.on('task:recordingStarted', () => {
       if (this.task !== task) return;
-      this.update({
-        ...taskControlState(task),
-        recordingActive: true,
-        recordingPaused: false,
-      });
+      this.syncTaskPresentation(task, {recordingActive: true, recordingPaused: false});
       this.log('Contact Center call recording started.', 'success');
     });
     task.on('task:recordingPaused', () => {
       if (this.task !== task) return;
-      this.update({...taskControlState(task), recordingActive: true, recordingPaused: true});
+      this.syncTaskPresentation(task, {recordingActive: true, recordingPaused: true});
     });
     task.on('task:recordingResumed', () => {
       if (this.task !== task) return;
-      this.update({...taskControlState(task), recordingActive: true, recordingPaused: false});
+      this.syncTaskPresentation(task, {recordingActive: true, recordingPaused: false});
     });
-    task.on('task:consultCreated', () => this.update({consultActive: true}));
-    task.on('task:consulting', () => this.update({consultActive: true}));
-    task.on('task:consultEnd', () =>
-      this.update({consultActive: false, consultDestinationName: ''}),
+    task.on('task:recordingPauseFailed', () => {
+      if (this.task !== task) return;
+      this.syncTaskPresentation(task);
+      this.update({error: 'Contact Center did not pause call recording.'});
+      this.log('Pausing call recording failed.', 'error');
+    });
+    task.on('task:recordingResumeFailed', () => {
+      if (this.task !== task) return;
+      this.syncTaskPresentation(task);
+      this.update({error: 'Contact Center did not resume call recording.'});
+      this.log('Resuming call recording failed.', 'error');
+    });
+
+    task.on('task:consultCreated', () =>
+      this.syncTaskPresentation(task, {consultActive: true, consultStatus: 'connecting'}),
+    );
+    const handleConsultConnected = () =>
+      this.syncTaskPresentation(task, {consultActive: true, consultStatus: 'connected'}, true);
+    task.on('task:consultAccepted', handleConsultConnected);
+    task.on('task:consulting', handleConsultConnected);
+    const handleConsultEnded = () =>
+      this.syncTaskPresentation(
+        task,
+        {
+          consultActive: false,
+          consultStatus: 'none',
+          consultDestinationId: '',
+          consultDestinationType: '',
+          consultDestinationName: '',
+        },
+        true,
+      );
+    task.on('task:consultEnd', handleConsultEnded);
+    task.on('task:consultQueueCancelled', handleConsultEnded);
+    task.on('task:consultQueueFailed', () => {
+      if (this.task !== task) return;
+      handleConsultEnded();
+      this.update({error: 'The Contact Center consultation did not connect.'});
+      this.log('Consultation failed.', 'error');
+    });
+    task.on('task:switchCall', () => this.syncTaskPresentation(task, {}, true));
+
+    task.on('task:conferenceEstablishing', () =>
+      this.syncTaskPresentation(task, {}, true),
     );
     task.on('task:conferenceStarted', () =>
-      this.update({consultActive: false, conferenceActive: true}),
+      this.syncTaskPresentation(
+        task,
+        {
+          consultActive: false,
+          consultStatus: 'none',
+          conferenceActive: true,
+          consultDestinationId: '',
+          consultDestinationType: '',
+          consultDestinationName: '',
+        },
+        true,
+      ),
     );
     task.on('task:conferenceEnded', () =>
-      this.update({consultActive: false, conferenceActive: false}),
+      this.syncTaskPresentation(
+        task,
+        {
+          consultActive: false,
+          consultStatus: 'none',
+          conferenceActive: false,
+          consultDestinationId: '',
+          consultDestinationType: '',
+          consultDestinationName: '',
+        },
+        true,
+      ),
     );
+    task.on('task:conferenceFailed', () => {
+      if (this.task !== task) return;
+      this.syncTaskPresentation(task, {conferenceActive: false}, true);
+      this.update({error: 'Contact Center could not establish the conference.'});
+      this.log('Conference failed.', 'error');
+    });
+    task.on('task:conferenceTransferFailed', () => {
+      if (this.task !== task) return;
+      this.syncTaskPresentation(task, {}, true);
+      this.update({error: 'Contact Center could not hand off the conference.'});
+      this.log('Conference handoff failed.', 'error');
+    });
+    task.on('task:conferenceEndFailed', () => {
+      if (this.task !== task) return;
+      this.syncTaskPresentation(task, {}, true);
+      this.update({error: 'Contact Center could not end the conference.'});
+      this.log('Ending the conference failed.', 'error');
+    });
+    task.on('task:participantLeftFailed', () => {
+      if (this.task !== task) return;
+      this.syncTaskPresentation(task, {}, true);
+      this.update({error: 'Contact Center could not remove the conference participant.'});
+      this.log('Removing a conference participant failed.', 'error');
+    });
+    task.on('task:participantJoined', () => this.syncTaskPresentation(task, {}, true));
+    task.on('task:participantLeft', () => this.syncTaskPresentation(task, {}, true));
+    task.on('task:merged', () => this.syncTaskPresentation(task, {}, true));
+    task.on('task:conferenceTransferred', () => this.syncTaskPresentation(task, {}, true));
+    task.on('task:exitConference', () => this.syncTaskPresentation(task, {}, true));
+    task.on('task:transferConference', () => this.syncTaskPresentation(task, {}, true));
+    task.on('task:postCallActivity', () => this.syncTaskPresentation(task));
+    task.on('task:multiLoginHydrate', () => {
+      if (this.task !== task) return;
+      const data = (task.data ?? {}) as unknown as Record<string, any>;
+      const interactionState = String(data.interaction?.state ?? '').toLowerCase();
+      const conferenceActive = Boolean(data.isConferencing || data.isConferenceInProgress);
+      const agentId = this.profile?.agentId || String(data.agentId ?? '');
+      const selfParticipant = data.interaction?.participants?.[agentId];
+      const consultEnded =
+        data.type === 'AgentConsultEnded' ||
+        data.type === 'AgentConsultFailed' ||
+        selfParticipant?.consultState === 'consultCompleted';
+      const consultActive = !conferenceActive && !consultEnded && Boolean(
+        data.isConsulted ||
+        interactionState.includes('consult') ||
+        data.consultMediaResourceId ||
+        data.type === 'AgentConsultCreated' ||
+        data.type === 'AgentConsulting' ||
+        (data.destAgentId && data.destinationType) ||
+        selfParticipant?.consultState === 'consultInitiated',
+      );
+      const consultConnected = consultActive && Boolean(
+        data.isConsulted ||
+        interactionState.includes('consulting') ||
+        data.type === 'AgentConsulting' ||
+        selfParticipant?.consultState === 'consulting',
+      );
+      const destinationType = String(data.destinationType ?? '').toLowerCase();
+      const consultDestinationType = destinationType === 'queue' || destinationType === 'agent'
+        ? destinationType
+        : '';
+      const consultDestinationId = consultActive
+        ? this.snapshot.consultDestinationId || String(data.destAgentId ?? '')
+        : '';
+      const active = ['connected', 'hold', 'held', 'consulting', 'conference'].some((state) =>
+        interactionState.includes(state),
+      );
+      this.syncTaskPresentation(
+        task,
+        {
+          consultActive,
+          consultStatus: consultActive ? (consultConnected ? 'connected' : 'connecting') : 'none',
+          conferenceActive,
+          consultDestinationId,
+          consultDestinationType: consultActive
+            ? this.snapshot.consultDestinationType || consultDestinationType
+            : '',
+          consultDestinationName: consultActive
+            ? this.snapshot.consultDestinationName ||
+              this.snapshot.destinations.find((destination) => destination.id === consultDestinationId)?.name ||
+              ''
+            : '',
+        },
+        active,
+      );
+    });
+    task.on('task:unassigned', () => {
+      if (this.task !== task) return;
+      this.stopTranscription(task);
+      this.log('WxCC task was unassigned.', 'warning');
+      this.clearCallState();
+    });
     task.on('REAL_TIME_TRANSCRIPTION', (payload: unknown) => {
       if (this.task !== task) return;
       const entry = transcriptEntry(payload);
@@ -1718,7 +2009,10 @@ export class WebexController {
       transferConferenceCapable: false,
       activeLeg: 'main',
       consultActive: false,
+      consultStatus: 'none',
       conferenceActive: false,
+      consultDestinationId: '',
+      consultDestinationType: '',
       consultDestinationName: '',
       destinations: [],
       destinationsLoaded: false,

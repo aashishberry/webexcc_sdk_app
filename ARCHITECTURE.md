@@ -230,12 +230,32 @@ The UI treats the SDK task as the single source of truth for the active interact
 
 - `task.uiControls.main` determines whether answer, decline, consult, transfer, and main-leg operations are enabled.
 - `task.uiControls.activeLeg` selects the capability set for hold, mute, keypad, call-leg switching, conference, consult transfer, consult end, conference exit, and conference handoff.
-- `task:ui-controls-updated` refreshes capability state.
-- `task:assigned`, `task:hold`, and `task:resume` determine the connected and held presentation.
+- `task:ui-controls-updated` refreshes capability state and reconciles the active leg's hold state from `interaction.media[].isHold`.
+- `task:assigned` and `task:autoAnswered` replace offer controls with the connected presentation.
+- `task:hold`, `task:resume`, and `task:switchCall` determine the active leg and whether the UI presents Hold or Resume.
+- `task:consultCreated` enters the pending consult phase. `task:consultAccepted` and `task:consulting` move it to connected. While a queue consult is pending, cancellation passes the stored destination `queueId` to `endConsult()`; consult end, queue-cancel, queue-failure, and consult RONA then restore the remaining main leg, including its authoritative held state.
+- Conference start/end/failure and participant join/leave events refresh the participant list, active leg, and available controls.
 - `task:wxapp-mute-state-updated` synchronizes Webex App mute state.
 - `task:media` supplies the remote audio track for browser WebRTC calls.
 - `task:end`, `task:wrapup`, and `task:wrappedup` determine completion and cleanup.
 - `task:hydrate` restores the task and controls after refresh.
+
+The controller does not infer the active button from the previous button label. Every material telephony event runs the same task reconciliation: read `task.uiControls.activeLeg`, read that leg's media `isHold` value, refresh participants and recording state, and then derive the connected/held presentation. This prevents event ordering during consult and conference flows from leaving stale offer controls or an inverted Hold/Resume action.
+
+| SDK event group | Presentation response |
+|---|---|
+| `task:incoming`, `task:offerContact`, `task:offerConsult` | Establish or refresh the offered task and Answer/Decline capabilities |
+| `task:assigned`, `task:autoAnswered` | Enter connected state, start agent-connected timing, and start transcription |
+| `task:ui-controls-updated`, `task:hold`, `task:resume`, `task:switchCall` | Re-read the active leg, controls, and authoritative media hold state |
+| `task:consultCreated`, `task:consultAccepted`, `task:consulting` | Show a cancellable pending consult, then replace it with connected consult controls when the destination accepts |
+| `task:consultEnd`, `task:consultQueueCancelled`, `task:consultQueueFailed`, consult `task:rejected` | Remove the consult leg and restore the main leg's connected or held presentation |
+| Conference and participant events | Refresh conference mode, participants, active leg, and task capabilities |
+| Recording started/paused/resumed and failure events | Refresh recording state and surface operation failure without changing call lifecycle |
+| `task:rejected` on an offered primary task | Enter RONA, stop offer actions, and freeze offer timing |
+| `task:end`, `task:wrapup`, `task:wrappedup`, `task:unassigned` | Stop media/transcription and enter wrap-up or clear the task as appropriate |
+| `task:media`, multi-login hydration, Webex App mute, transcript, Assist, and summary events | Synchronize remote-session, companion media, and AI presentation without overriding task lifecycle |
+
+Campaign-preview events and outdial events are outside the current inbound-agent console feature set. Internal cleanup events are left to the SDK; the application responds to the public end, wrapped-up, rejected, and unassigned lifecycle events instead.
 
 Real-time transcription is a profile-gated companion lifecycle. After assignment, the controller sends an explicit `GET_TRANSCRIPTS` START request through `cc.apiAIAssistant.sendEvent()`. This is a compatibility fallback for task sequences in which the SDK receives a media-fork update but does not issue its automatic start request. Application-originated starts are deduplicated by interaction ID and paired with STOP on task end or wrap-up. The first transcript event establishes the active state; request failures stay within `transcriptionStatus` and do not change call state.
 
@@ -324,9 +344,18 @@ sequenceDiagram
     A->>C: Select destination and start consult
     C->>T: consult(holdParticipants: true)
     T->>W: Create consultation leg
-    W-->>T: task:consultCreated / task:consulting
-    T-->>C: Consultation active
-    C-->>A: Customer held, destination connected
+    W-->>T: task:consultCreated
+    T-->>C: Consultation pending
+    C-->>A: Customer held, Cancel consult available
+    alt Cancel pending queue consult
+        A->>C: Cancel consult
+        C->>T: endConsult(queueId)
+        W-->>T: task:consultQueueCancelled
+    else Destination answers
+        W-->>T: task:consultAccepted / task:consulting
+        T-->>C: Consultation connected
+        C-->>A: Connected consult controls
+    end
     opt Switch active leg
         A->>C: Switch call
         C->>T: switchCall()
@@ -394,10 +423,11 @@ Consultation and conference are orthogonal task modes rather than additional cal
 
 ```text
 consultActive
+consultStatus: none | connecting | connected
 conferenceActive
 ```
 
-`task:consultCreated`, `task:consulting`, and `task:consultEnd` update consultation state. `task:conferenceStarted` and `task:conferenceEnded` update conference state. During refresh hydration, `isConsulted`, `isConferencing`, and `isConferenceInProgress` restore these modes.
+The selected destination ID and type are retained while the consultation is active. A pending queue cancellation supplies that queue ID to the SDK, as required by the Contact Center task contract. `task:consultCreated`, `task:consultAccepted`, `task:consulting`, and the consult end/failure events update consultation state. Conference and participant events update conference state and membership. During refresh hydration, participant `consultState`, `isConsulted`, `isConferencing`, and `isConferenceInProgress` restore these modes.
 
 Queue, connected-call, and wrap-up timing use separate controller fields:
 

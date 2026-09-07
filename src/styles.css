@@ -207,16 +207,21 @@ input:focus { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf20; }
 .consult-heading .section-kicker { margin: 0; font-size: 9px; }
 .live-chip { display: flex; align-items: center; gap: 6px; border-radius: 999px; padding: 6px 9px; color: light-dark(#18743b, #8be0ac); background: light-dark(#e4f7eb, #173c29); font-size: 10px; font-weight: 720; }
 .live-chip i { width: 7px; height: 7px; border-radius: 50%; background: #20a464; }
+.live-chip.is-pending { color: light-dark(#805600, #f2d184); background: light-dark(#fff4d8, #433515); }
+.live-chip.is-pending i { background: #d89012; animation: status-pulse 1.4s ease-in-out infinite; }
+@keyframes status-pulse { 50% { opacity: .35; transform: scale(.78); } }
 .participant-list, .participant-manager { display: grid; gap: 8px; }
 .participant-row { min-width: 0; display: flex; align-items: center; gap: 10px; border-radius: 10px; padding: 10px; background: light-dark(#ffffffc7, #1d303b); }
 .participant-avatar { width: 35px; height: 35px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid light-dark(#c2dae8, #3c657a); border-radius: 50%; color: light-dark(#12628c, #a8e0fb); background: light-dark(#dbeefa, #22475b); font-size: 10px; font-weight: 800; }
 .participant-row > div { min-width: 0; flex: 1; display: grid; gap: 2px; }
 .participant-row strong, .participant-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .participant-row > div span { color: light-dark(#657681, #a5b3be); font-size: 10px; }
-.held-chip, .connected-chip { flex: 0 0 auto; font-size: 10px; font-weight: 750; }
+.held-chip, .connected-chip, .pending-chip { flex: 0 0 auto; font-size: 10px; font-weight: 750; }
 .held-chip { color: light-dark(#8b5c00, #f1ce78); }
 .connected-chip { color: light-dark(#18743b, #8be0ac); }
+.pending-chip { color: light-dark(#805600, #f2d184); }
 .consult-action-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.consult-action-row.pending-consult-actions { grid-template-columns: minmax(0, 1fr); }
 .consult-action-row .button, .conference-actions .button { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; padding: 9px 8px; font-size: 11px; }
 .consult-action-row .control-icon, .conference-actions .control-icon { width: 18px; height: 18px; }
 .conference-button { color: light-dark(#fff, #10232b); background: light-dark(#147da7, #65d6ed); }
