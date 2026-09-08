@@ -230,30 +230,53 @@ The UI treats the SDK task as the single source of truth for the active interact
 
 - `task.uiControls.main` determines whether answer, decline, consult, transfer, and main-leg operations are enabled.
 - `task.uiControls.activeLeg` selects the capability set for hold, mute, keypad, call-leg switching, conference, consult transfer, consult end, conference exit, and conference handoff.
-- `task:ui-controls-updated` refreshes capability state and reconciles the active leg's hold state from `interaction.media[].isHold`.
+- `task:ui-controls-updated` refreshes capability state. It does not by itself confirm that an asynchronous call-control request changed backend media state.
 - `task:assigned` and `task:autoAnswered` replace offer controls with the connected presentation.
-- `task:hold`, `task:resume`, and `task:switchCall` determine the active leg and whether the UI presents Hold or Resume.
-- `task:consultCreated` enters the pending consult phase. `task:consultAccepted` and `task:consulting` move it to connected. While a queue consult is pending, cancellation passes the stored destination `queueId` to `endConsult()`; consult end, queue-cancel, queue-failure, and consult RONA then restore the remaining main leg, including its authoritative held state.
+- `task:hold` and `task:resume` reconcile the active leg and determine whether the UI presents Hold or Resume. `task:switchCall` records the SDK's local switch request only; it does not replace the subsequent backend hold/unhold confirmation.
+- `task:consultCreated` enters the pending consult phase. `task:consultAccepted` and `task:consulting` move it to connected. While a queue consult is pending, cancellation passes the stored destination `queueId` to `endConsult()`. `task:consultQueueCancelled` confirms cancellation; `task:consultQueueFailed` represents a cancellation failure and therefore keeps the consult visible. `AgentConsultFailed` and `AgentCtqFailed` are recovered from the task's latest raw message because the pinned SDK recalculates controls but does not emit a dedicated initiator-side failure event.
 - Conference start/end/failure and participant join/leave events refresh the participant list, active leg, and available controls.
 - `task:wxapp-mute-state-updated` synchronizes Webex App mute state.
 - `task:media` supplies the remote audio track for browser WebRTC calls.
 - `task:end`, `task:wrapup`, and `task:wrappedup` determine completion and cleanup.
 - `task:hydrate` restores the task and controls after refresh.
 
-The controller does not infer the active button from the previous button label. Every material telephony event runs the same task reconciliation: read `task.uiControls.activeLeg`, read the main and consult media `isHold` values, map each participant to its authoritative media leg, refresh recording state, and then derive the connected/held presentation. This prevents event ordering during consult and conference flows from leaving stale offer controls, inverted Hold/Resume actions, or stale participant hold badges after a call-leg switch.
+The controller does not infer the active button from the previous button label or from a task method resolving. Contact Control methods are asynchronous. Every confirmed material telephony event runs the same task reconciliation: read `task.uiControls.activeLeg`, read the main and consult media `isHold` values, map each participant to its current media leg, refresh recording state, and then derive the connected/held presentation. The raw notification discriminator is `data.type`; `data.eventType` is commonly only the `RoutingMessage` envelope category. This prevents event ordering during consult and conference flows from leaving stale offer controls, inverted Hold/Resume actions, or stale participant hold badges after a call-leg switch. The event names and payload fields follow the [official Contact Control API guide](https://developer.webex.com/webex-contact-center/docs/contact-control-apis).
 
 | SDK event group | Presentation response |
 |---|---|
 | `task:incoming`, `task:offerContact`, `task:offerConsult` | Establish or refresh the offered task and Answer/Decline capabilities |
 | `task:assigned`, `task:autoAnswered` | Enter connected state, start agent-connected timing, and start transcription |
-| `task:ui-controls-updated`, `task:hold`, `task:resume`, `task:switchCall` | Re-read the active leg, controls, and authoritative media hold state |
+| `task:ui-controls-updated` | Re-read SDK capability flags only; inspect a new raw `data.type` for SDK event gaps such as initiator-side consult failure |
+| `task:hold`, `task:resume` | Re-read the active leg and authoritative media hold state after backend confirmation |
+| `task:switchCall` | Do not change call presentation; wait for the resulting hold/unhold notification |
 | `task:consultCreated`, `task:consultAccepted`, `task:consulting` | Show a cancellable pending consult, then replace it with connected consult controls when the destination accepts |
-| `task:consultEnd`, `task:consultQueueCancelled`, `task:consultQueueFailed`, consult `task:rejected` | Remove the consult leg and restore the main leg's connected or held presentation |
-| Conference and participant events | Refresh conference mode, participants, active leg, and task capabilities; retain an explicit disconnected presentation for departed participants |
+| `task:consultEnd`, `task:consultQueueCancelled`, consult `task:rejected` | Remove the consult leg and restore the main leg's connected or held presentation |
+| `AgentConsultFailed`, `AgentCtqFailed` in current task data | Clear the failed consult, preserve the confirmed main-leg state, and surface the backend reason; a paused-recording reason instructs the agent to resume recording and retry |
+| `task:consultQueueFailed` | Keep the pending consult and report that its cancellation failed |
+| Conference and participant events | Refresh conference mode and use the latest participant/media snapshots as authoritative; never mark every missing or top-level-ID participant as departed |
 | Recording started/paused/resumed and failure events | Refresh recording state and surface operation failure without changing call lifecycle |
 | `task:rejected` on an offered primary task | Enter RONA, stop offer actions, and freeze offer timing |
 | `task:end`, `task:wrapup`, `task:wrappedup`, `task:unassigned` | Stop media/transcription and enter wrap-up or clear the task as appropriate |
 | `task:media`, multi-login hydration, Webex App mute, transcript, Assist, and summary events | Synchronize remote-session, companion media, and AI presentation without overriding task lifecycle |
+
+The Contact Control request-to-notification matrix used by this controller is:
+
+| Operation | Success notification | Failure notification |
+|---|---|---|
+| Accept | `AgentContactAssigned` | `AgentContactAssignFailed` |
+| Hold | `AgentContactHeld` | `AgentContactHoldFailed` |
+| Resume | `AgentContactUnheld` | `AgentContactUnHoldFailed` |
+| Consult | `AgentConsultCreated`, then `AgentConsulting` when connected | `AgentConsultFailed` or `AgentCtqFailed` |
+| End consult / cancel queue consult | `AgentConsultEnded` or `AgentCtqCancelled` | `AgentConsultEndFailed` or `AgentCtqCancelFailed` |
+| Merge consult to conference | `AgentConsultConferenced` | `AgentConsultConferenceFailed` |
+| Remove conference participant | `ParticipantLeftConference` | `ParticipantDropConferenceFailed` or `ParticipantLeftConferenceFailed` |
+| Exit conference | `AgentConsultConferenceEnded` | `AgentConsultConferenceEndFailed` |
+| Blind, queue, or consult transfer | `AgentBlindTransferred`, `AgentVteamTransferred`, or `AgentConsultTransferred` | Corresponding transfer-failed notification |
+| Pause / resume recording | `ContactRecordingPaused` / `ContactRecordingResumed` | `ContactRecordingPauseFailed` / `ContactRecordingResumeFailed` |
+| End contact | `ContactEnded` | `AgentContactEndFailed` |
+| Wrap up | `AgentWrapup`, then `AgentWrappedUp` | `AgentWrapupFailed` |
+
+`type` identifies these notifications. `eventType` identifies the message envelope and must not be used as the call-control discriminator. The SDK owns the transport, request correlation, and state machine. The application uses public task events and `task.uiControls` for control availability; its narrow raw-task inspection exists only to bridge the pinned SDK's missing initiator-side consult-failure emission.
 
 Campaign-preview events and outdial events are outside the current inbound-agent console feature set. Internal cleanup events are left to the SDK; the application responds to the public end, wrapped-up, rejected, and unassigned lifecycle events instead.
 
@@ -359,6 +382,9 @@ sequenceDiagram
     opt Switch active leg
         A->>C: Switch call
         C->>T: switchCall()
+        T->>W: Hold or unhold target media leg
+        W-->>T: task:hold / task:resume
+        T-->>C: Confirmed active-leg media snapshot
     end
     alt End consultation
         A->>C: End consult
@@ -427,7 +453,7 @@ consultStatus: none | connecting | connected
 conferenceActive
 ```
 
-The selected destination ID and type are retained while the consultation is active. A pending queue cancellation supplies that queue ID to the SDK, as required by the Contact Center task contract. `task:consultCreated`, `task:consultAccepted`, `task:consulting`, and the consult end/failure events update consultation state. Conference and participant events update conference state and membership. During refresh hydration, participant `consultState`, `isConsulted`, `isConferencing`, and `isConferenceInProgress` restore these modes.
+The selected destination ID and type are retained only after `task:consultCreated` confirms the consultation. A pending queue cancellation supplies that queue ID to the SDK, as required by the Contact Center task contract. `task:consultCreated`, `task:consultAccepted`, `task:consulting`, and the consult end/failure events update consultation state. Conference and participant events update conference state and membership. During refresh hydration, participant `consultState`, `isConsulted`, `isConferencing`, and `isConferenceInProgress` restore these modes.
 
 Queue, connected-call, and wrap-up timing use separate controller fields:
 
@@ -477,7 +503,7 @@ The SDK and backend are authoritative. Stored browser data is only a signal to a
 
 If `isAgentLoggedIn` is false, the UI returns to station login without creating a replacement station. If SDK initialization fails, the error is displayed and no cleanup request is sent automatically.
 
-Conference hydration restores the conference mode from the task. Authoritative participant records are normalized from task data; temporary display rows are reconstructed only until that SDK data arrives. `ParticipantLeftConference` may either mark a participant `hasLeft` or remove it from the latest roster. The controller reconciles both forms, retains the departed row as `Disconnected` for the remainder of the interaction, and excludes it from active conference counts.
+Conference hydration restores the conference mode from the task. Authoritative participant records are normalized from task data; temporary display rows are reconstructed only until that SDK data arrives. The pinned SDK treats each incoming `interaction.media` and `interaction.participants` map as a complete current snapshot and prunes absent keys. The controller mirrors that contract instead of retaining absent participants. On `ParticipantLeftConference`, it sets the separate customer-left indicator only when the event flag, the known customer participant ID, or the confirmed removal of the previously known customer identifies the caller as the departing party.
 
 ## 13. Notification architecture
 

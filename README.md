@@ -150,21 +150,23 @@ npm start
 | Available/Idle | Contact Center SDK | Agent-state APIs and configured auxiliary codes; the selector remains available during connected calls to establish the agent's following state |
 | Answer | Contact Center SDK task | `task.accept()` uses native WebRTC for browser login or Better Together for an eligible Webex App task; availability comes from `uiControls.main.accept` |
 | Decline | Contact Center SDK task | `task.decline()` routes internally to Webex App reject; the local offered-task view clears after success |
-| Hold/resume | Contact Center SDK task | `task.hold()` and `task.resume()`, gated by the active leg's UI control and synchronized from hold, resume, switch, and consult lifecycle events |
+| Hold/resume | Contact Center SDK task | `task.hold()` and `task.resume()`, gated by the active leg's UI control; the UI changes only after `task:hold` / `task:resume` confirms the backend event |
 | Mute/unmute | Contact Center SDK task | `task.toggleMute({muted})`, gated by the active leg's mute control; Webex App changes synchronize through `task:wxapp-mute-state-updated` |
 | DTMF | Contact Center SDK task | `task.transmitDtmf({dtmf})`, gated by the active leg's keypad control or an eligible correlated main Webex App call; digits are not sent to backend diagnostics |
 | End call | Contact Center SDK task | `task.end()`, gated by the active/main leg controls; wrap-up remains backend-authoritative |
 | Recording status and pause/resume | Contact Center SDK task | `task:recordingStarted`, paused, and resumed events drive the left-pane status; controls are available only when the task UI control permits them |
 | Consult/transfer | Contact Center SDK task | Uses eligible agents and telephony queues returned by the SDK. A pending queue consult can be cancelled with `endConsult({isConsult: true, taskId, queueId})`; a connected consult omits `queueId` when it ends. |
 | Consult conference | Contact Center SDK task | `consultConference()` merges the held customer and consulted destination into a three-party conference |
-| Switch consult leg | Contact Center SDK task | `switchCall()` changes the active main/consult leg when the active leg exposes the switch control |
+| Switch consult leg | Contact Center SDK task | `switchCall()` requests a leg change when the active leg exposes the switch control; `AgentContactHeld` / `AgentContactUnheld` confirms the actual media-leg state |
 | Conference participant removal | Contact Center SDK task | `dropConferenceParticipant({participantId})`, enabled only for authoritative participant IDs returned by task data |
 | Conference handoff | Contact Center SDK task | `transferConference()`, gated by the active task UI control |
 | Conference exit | Contact Center SDK task | `exitConference()` removes the current agent and leaves the other conference parties connected |
 | Wrap-up | Contact Center SDK task | Uses configured wrap-up codes after the task enters wrap-up |
 | Transcript and AI assistance | Contact Center SDK AI Assistant | Profile-gated `GET_TRANSCRIPTS` START/STOP requests, historic and live transcripts, suggested responses, user-action feedback, and summary requests remain interaction-scoped |
 
-Conference rows are reconstructed only while the SDK participant map is unavailable. Reconstructed rows cannot be removed. As soon as task data supplies authoritative participant IDs, the console enables participant removal for active non-host participants and delegates the action to `task.dropConferenceParticipant()`. `ParticipantLeftConference` is also used for customer hang-up: the departed customer remains visible as `Disconnected`, is removed from the active-participant count, and cannot be dropped again.
+Contact Control operations are asynchronous. The application does not use a task method's completion as an independent state transition and does not optimistically change hold, recording, consult, conference, switch, or participant state. The matching task notification and the SDK's recalculated `task.uiControls` are the state boundary. See the [official Contact Control API event mappings](https://developer.webex.com/webex-contact-center/docs/contact-control-apis).
+
+Conference rows are reconstructed only while the SDK participant map is unavailable. Reconstructed rows cannot be removed. As soon as task data supplies authoritative participant IDs, the console enables participant removal for active non-host participants and delegates the action to `task.dropConferenceParticipant()`. The SDK treats `interaction.participants` and `interaction.media` as current snapshots, so the application never carries a missing participant forward as `Disconnected`. A confirmed `ParticipantLeftConference` can instead set the separate customer-left status when the departing participant is the customer.
 
 Recovered tasks use the agent participant's backend `joinTimestamp` for the call start and the backend wrap-up, termination, or ended-event timestamp for the call end. Refreshing during wrap-up therefore preserves both the completed call duration and elapsed wrap-up duration.
 

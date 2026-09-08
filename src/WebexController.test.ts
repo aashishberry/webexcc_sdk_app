@@ -366,9 +366,8 @@ describe('WebexController task completion', () => {
     });
     observeTask(controller, task);
 
-    task.emitTest('task:consultEnd');
     (task.uiControls as any).activeLeg = 'main';
-    task.emitTest('task:ui-controls-updated');
+    task.emitTest('task:consultEnd');
 
     expect(controller.getSnapshot()).toMatchObject({
       callStatus: 'held',
@@ -421,7 +420,7 @@ describe('WebexController task completion', () => {
     });
     observeTask(controller, task);
 
-    task.emitTest('task:switchCall');
+    task.emitTest('task:resume');
 
     expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
       expect.objectContaining({id: 'customer-1', name: 'Caller One', type: 'Customer', state: 'Connected', held: false}),
@@ -434,12 +433,19 @@ describe('WebexController task completion', () => {
     task.emitTest('task:switchCall');
 
     expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
+      expect.objectContaining({id: 'customer-1', state: 'Connected', held: false}),
+      expect.objectContaining({id: 'agent-2', state: 'Held', held: true}),
+    ]));
+
+    task.emitTest('task:hold');
+
+    expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
       expect.objectContaining({id: 'customer-1', state: 'Held', held: true}),
       expect.objectContaining({id: 'agent-2', state: 'Connected', held: false}),
     ]));
   });
 
-  it('retains a disconnected customer after a conference participant-left snapshot', () => {
+  it('uses the authoritative participant snapshot and marks only a departed customer', () => {
     const controller = new WebexController();
     const task = fakeTask(false);
     const internal = controller as unknown as {
@@ -452,7 +458,8 @@ describe('WebexController task completion', () => {
     internal.update({conferenceActive: true, callStatus: 'connected'});
     Object.assign((task.data as any), {
       agentId: 'agent-1',
-      eventType: 'ParticipantJoinedConference',
+      type: 'ParticipantJoinedConference',
+      eventType: 'RoutingMessage',
       interaction: {
         owner: 'agent-1',
         state: 'conference',
@@ -479,23 +486,19 @@ describe('WebexController task completion', () => {
       expect.objectContaining({id: 'customer-1', state: 'Connected'}),
     ]));
 
-    (task.data as any).eventType = 'ParticipantLeftConference';
+    (task.data as any).type = 'ParticipantLeftConference';
     (task.data as any).participantId = 'customer-1';
     delete (task.data as any).interaction.participants['customer-1'];
     (task.data as any).interaction.media['interaction-1'].participants = ['agent-1', 'agent-2'];
     task.emitTest('task:participantLeft');
 
-    expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: 'customer-1',
-        name: 'Caller One',
-        type: 'Customer',
-        state: 'Disconnected',
-        held: false,
-      }),
-    ]));
+    expect(controller.getSnapshot()).toMatchObject({customerLeft: true});
+    expect(controller.getSnapshot().participants).toEqual([
+      expect.objectContaining({id: 'agent-1', state: 'Connected'}),
+      expect.objectContaining({id: 'agent-2', state: 'Connected'}),
+    ]);
 
-    (task.data as any).eventType = 'ContactUpdated';
+    (task.data as any).type = 'ParticipantJoinedConference';
     (task.data as any).participantId = 'agent-3';
     (task.data as any).interaction.participants['customer-1'] = {
       id: 'customer-1',
@@ -504,10 +507,11 @@ describe('WebexController task completion', () => {
       hasJoined: true,
       hasLeft: false,
     };
-    task.emitTest('task:ui-controls-updated');
+    task.emitTest('task:participantJoined');
 
+    expect(controller.getSnapshot()).toMatchObject({customerLeft: false});
     expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
-      expect.objectContaining({id: 'customer-1', state: 'Disconnected'}),
+      expect.objectContaining({id: 'customer-1', state: 'Connected'}),
     ]));
   });
 
@@ -947,10 +951,21 @@ describe('WebexController call controls', () => {
       update: (patch: Record<string, unknown>) => void;
     };
     internal.task = task;
+    observeTask(controller, task);
     internal.update({callStatus: 'connected', holdCapable: true, activeTask: task});
 
     await controller.toggleHold();
+    expect(controller.getSnapshot()).toMatchObject({callStatus: 'connected', held: false});
+    (task.data as any).interaction = {
+      state: 'hold',
+      mainInteractionId: 'interaction-1',
+      media: {'interaction-1': {mediaResourceId: 'interaction-1', mType: 'mainCall', isHold: true}},
+    };
+    task.emitTest('task:hold');
     await controller.toggleHold();
+    (task.data as any).interaction.state = 'connected';
+    (task.data as any).interaction.media['interaction-1'].isHold = false;
+    task.emitTest('task:resume');
 
     expect(task.hold).toHaveBeenCalledOnce();
     expect(task.resume).toHaveBeenCalledOnce();
@@ -1048,7 +1063,11 @@ describe('WebexController call controls', () => {
       task: ITask;
       update: (patch: Record<string, unknown>) => void;
     };
-    internal.task = {pauseRecording, resumeRecording} as unknown as ITask;
+    const task = fakeTask(false);
+    (task as any).pauseRecording = pauseRecording;
+    (task as any).resumeRecording = resumeRecording;
+    internal.task = task;
+    observeTask(controller, task);
     internal.update({
       callStatus: 'connected',
       recordingPauseCapable: true,
@@ -1056,7 +1075,18 @@ describe('WebexController call controls', () => {
     });
 
     await controller.toggleRecording();
+    expect(controller.getSnapshot().recordingPaused).toBe(false);
+    (task.uiControls as any).main.recording = {isVisible: true, isEnabled: true};
+    (task.data as any).interaction = {
+      callProcessingDetails: {
+        recordingStarted: true,
+        recordInProgress: true,
+        pauseResumeEnabled: true,
+      },
+    };
+    task.emitTest('task:recordingPaused');
     await controller.toggleRecording();
+    task.emitTest('task:recordingResumed');
 
     expect(pauseRecording).toHaveBeenCalledOnce();
     expect(resumeRecording).toHaveBeenCalledWith({autoResumed: false});
@@ -1100,15 +1130,20 @@ describe('WebexController call controls', () => {
 
   it('merges an active consultation into a conference', async () => {
     const controller = new WebexController();
+    const task = fakeTask(false);
     const consultConference = vi.fn(async () => undefined);
+    (task as any).consultConference = consultConference;
     const internal = controller as unknown as {
       task: ITask;
       update: (patch: Record<string, unknown>) => void;
     };
-    internal.task = {consultConference} as unknown as ITask;
+    internal.task = task;
+    observeTask(controller, task);
     internal.update({consultActive: true, conferenceActive: false});
 
     await controller.startConference();
+    expect(controller.getSnapshot()).toMatchObject({consultActive: true, conferenceActive: false});
+    task.emitTest('task:conferenceStarted');
 
     expect(consultConference).toHaveBeenCalledOnce();
     expect(controller.getSnapshot().consultActive).toBe(false);
@@ -1123,12 +1158,21 @@ describe('WebexController call controls', () => {
       update: (patch: Record<string, unknown>) => void;
     };
     internal.task = task;
+    observeTask(controller, task);
     internal.update({
       activeTask: task,
       destinations: [{id: 'queue-7', name: 'Support queue', type: 'queue'}],
     });
 
     await controller.consult('queue-7');
+    expect(controller.getSnapshot()).toMatchObject({consultActive: false, consultStatus: 'none'});
+    Object.assign((task.data as any), {
+      type: 'AgentConsultCreated',
+      eventType: 'RoutingMessage',
+      queueId: 'queue-7',
+      destinationType: 'queue',
+    });
+    task.emitTest('task:consultCreated');
     await controller.endConsult();
 
     expect(task.consult).toHaveBeenCalledWith({
@@ -1141,13 +1185,9 @@ describe('WebexController call controls', () => {
       taskId: 'interaction-1',
       queueId: 'queue-7',
     });
-    expect(controller.getSnapshot()).toMatchObject({
-      consultActive: false,
-      consultStatus: 'none',
-      consultDestinationId: '',
-      consultDestinationType: '',
-      consultDestinationName: '',
-    });
+    expect(controller.getSnapshot()).toMatchObject({consultActive: true, consultStatus: 'connecting'});
+    task.emitTest('task:consultQueueCancelled');
+    expect(controller.getSnapshot()).toMatchObject({consultActive: false, consultStatus: 'none'});
   });
 
   it('ends a connected consultation without the pending queue cancellation field', async () => {
@@ -1176,17 +1216,74 @@ describe('WebexController call controls', () => {
 
   it('exits an active conference through the Contact Center task', async () => {
     const controller = new WebexController();
+    const task = fakeTask(false);
     const exitConference = vi.fn(async () => undefined);
+    (task as any).exitConference = exitConference;
     const internal = controller as unknown as {
       task: ITask;
       update: (patch: Record<string, unknown>) => void;
     };
-    internal.task = {exitConference} as unknown as ITask;
+    internal.task = task;
+    observeTask(controller, task);
     internal.update({conferenceActive: true});
 
     await controller.exitConference();
+    expect(controller.getSnapshot().conferenceActive).toBe(true);
+    task.emitTest('task:conferenceEnded');
 
     expect(exitConference).toHaveBeenCalledOnce();
     expect(controller.getSnapshot().conferenceActive).toBe(false);
+  });
+
+  it('recovers from a backend consult failure while recording is paused', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.update({
+      activeTask: task,
+      callStatus: 'held',
+      held: true,
+      recordingActive: true,
+      recordingPaused: true,
+      consultActive: true,
+      consultStatus: 'connecting',
+      consultDestinationId: 'agent-2',
+      consultDestinationType: 'agent',
+      consultDestinationName: 'Agent Two',
+    });
+    observeTask(controller, task);
+    Object.assign((task.data as any), {
+      type: 'AgentConsultFailed',
+      eventType: 'RoutingMessage',
+      trackingId: 'tracking-1',
+      reason: 'RECORDING_PAUSED',
+      interaction: {
+        state: 'hold',
+        mainInteractionId: 'interaction-1',
+        callProcessingDetails: {
+          recordingStarted: true,
+          recordInProgress: false,
+          isPaused: true,
+          pauseResumeEnabled: true,
+        },
+        media: {'interaction-1': {mediaResourceId: 'interaction-1', mType: 'mainCall', isHold: true}},
+      },
+    });
+
+    task.emitTest('task:ui-controls-updated');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'held',
+      held: true,
+      recordingPaused: true,
+      consultActive: false,
+      consultStatus: 'none',
+      consultDestinationId: '',
+    });
+    expect(controller.getSnapshot().error).toContain('Resume call recording');
   });
 });

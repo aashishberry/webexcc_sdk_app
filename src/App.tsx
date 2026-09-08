@@ -417,8 +417,10 @@ export function App() {
   const activeParticipantCount = displayParticipants.filter(
     (participant) => participant.state !== 'Disconnected',
   ).length;
-  const customerDisconnected = snapshot.conferenceActive && displayParticipants.some(
-    (participant) => participant.type === 'Customer' && participant.state === 'Disconnected',
+  const customerDisconnected = snapshot.conferenceActive && (
+    snapshot.customerLeft || displayParticipants.some(
+      (participant) => participant.type === 'Customer' && participant.state === 'Disconnected',
+    )
   );
 
   const selectExtension = (extension: string) => {

@@ -130,6 +130,7 @@ export interface ControllerSnapshot {
   callerNumber: string;
   interactionContext: InteractionContext;
   participants: InteractionParticipant[];
+  customerLeft: boolean;
   acceptCapable: boolean;
   declineCapable: boolean;
   holdCapable: boolean;
@@ -230,6 +231,7 @@ export const initialSnapshot: ControllerSnapshot = {
     language: '',
   },
   participants: [],
+  customerLeft: false,
   acceptCapable: false,
   declineCapable: false,
   holdCapable: false,
