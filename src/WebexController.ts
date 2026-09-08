@@ -132,6 +132,10 @@ function interactionParticipants(
     : mainMedia;
   const currentAgentId = firstText(agentId, data.agentId);
   const interactionState = firstText(interaction.state).toLowerCase();
+  const conferenceActive =
+    String(data.isConferencing).toLowerCase() === 'true' ||
+    String(data.isConferenceInProgress).toLowerCase() === 'true' ||
+    interactionState.includes('conference');
   const interactionTerminated =
     interaction.isTerminated === true ||
     interactionState === 'terminated' ||
@@ -194,7 +198,7 @@ function interactionParticipants(
         ? activeMedia
         : isCustomer && belongsTo(mainMedia)
           ? mainMedia
-          : belongsTo(consultMedia) && !belongsTo(mainMedia)
+          : !conferenceActive && !isCurrentAgent && belongsTo(consultMedia)
             ? consultMedia
             : belongsTo(mainMedia)
               ? mainMedia
@@ -507,17 +511,16 @@ function taskRequiresWrapup(task: ITask, agentId = ''): boolean {
     ? data.agentsPendingWrapUp.map(String)
     : undefined;
 
-  if (agentsPendingWrapUp) return agentsPendingWrapUp.includes(currentAgentId);
+  if (agentsPendingWrapUp?.length) return agentsPendingWrapUp.includes(currentAgentId);
 
   const participant = taskAgentParticipant(task, currentAgentId);
   const participantState = firstText(participant?.currentState).toLowerCase();
   if (participant?.isWrapUp === true || participantState.includes('wrap')) return true;
 
-  return data.wrapUpRequired === true && (
-    !currentAgentId ||
-    !interaction.owner ||
-    interaction.owner === currentAgentId
-  );
+  if (data.wrapUpRequired === true) return true;
+  if (currentAgentId && interaction.owner === currentAgentId) return true;
+
+  return data.isConsulted === false;
 }
 
 function isTerminalContactEnded(task: ITask): boolean {
@@ -525,13 +528,15 @@ function isTerminalContactEnded(task: ITask): boolean {
   if (taskMessageType(task) !== 'ContactEnded') return false;
   const interaction = data.interaction ?? {};
   const state = firstText(interaction.state).toLowerCase();
-  return (
+  if (
     interaction.isTerminated === true ||
     state === 'terminated' ||
     state === 'ended' ||
     state === 'wrapup' ||
     Array.isArray(data.agentsPendingWrapUp)
-  );
+  ) return true;
+
+  return !taskConferenceFacts(task).conferenceActive;
 }
 
 function taskActiveLegHeld(task: ITask): boolean | undefined {
@@ -1866,6 +1871,11 @@ export class WebexController {
       (participant) => participant.type === 'Customer' && participant.state !== 'Disconnected',
     );
     const currentParticipants = interactionParticipants(task, this.profile?.agentId);
+    const currentAgent = currentParticipants.find((participant) => participant.isCurrentAgent);
+    if (currentAgent?.state === 'Disconnected') {
+      this.reconcileTerminalContactEnded(task);
+      return;
+    }
     const currentCustomer = currentParticipants.find((participant) => participant.type === 'Customer');
     const data = (task.data ?? {}) as unknown as Record<string, any>;
     const explicitCustomerLeft = String(
@@ -1885,23 +1895,13 @@ export class WebexController {
     }, true);
   }
 
-  private disconnectedParticipants(task: ITask): InteractionParticipant[] {
-    const current = interactionParticipants(task, this.profile?.agentId);
-    const participants = new Map(
-      [...this.snapshot.participants, ...current].map((participant) => [participant.id, participant]),
-    );
-    return [...participants.values()].map((participant) => ({
-      ...participant,
-      state: 'Disconnected',
-      held: false,
-    }));
-  }
-
   private reconcileTerminalContactEnded(task: ITask): void {
     if (this.task !== task) return;
-    const requiresWrapup = taskRequiresWrapup(task, this.profile?.agentId);
+    const interactionState = firstText((task.data as any)?.interaction?.state).toLowerCase();
+    const contactWasConnected =
+      !['ringing', 'answering'].includes(this.snapshot.callStatus) && interactionState !== 'new';
+    const requiresWrapup = contactWasConnected && taskRequiresWrapup(task, this.profile?.agentId);
     const endedAt = taskEndedAt(task, this.profile?.agentId) || Date.now();
-    const participants = this.disconnectedParticipants(task);
     this.stopTranscription(task);
 
     if (!requiresWrapup) {
@@ -1917,7 +1917,7 @@ export class WebexController {
       callStatus: 'wrap-up',
       callEndedAt: this.snapshot.callEndedAt || endedAt,
       wrapupStartedAt: this.snapshot.wrapupStartedAt || wrapupStartedAt,
-      participants,
+      participants: [],
       customerLeft: true,
       held: false,
       recordingActive: false,
@@ -2282,7 +2282,7 @@ export class WebexController {
           callStatus: 'wrap-up',
           callEndedAt: this.snapshot.callEndedAt || endedAt,
           wrapupStartedAt: this.snapshot.wrapupStartedAt || endedAt,
-          participants: this.disconnectedParticipants(currentTask),
+          participants: [],
           customerLeft: true,
           held: false,
           recordingActive: false,

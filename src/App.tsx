@@ -1125,7 +1125,9 @@ export function App() {
                             <div className="consult-origin" aria-label="Consult initiator">
                               <span>Initiated by</span>
                               <strong>{consultInitiatorLabel}</strong>
-                              <code title={snapshot.consultInitiatorId}>{snapshot.consultInitiatorId}</code>
+                              {!snapshot.consultInitiatorName && (
+                                <code title={snapshot.consultInitiatorId}>{snapshot.consultInitiatorId}</code>
+                              )}
                             </div>
                           )}
                           <div className="participant-list">
@@ -1189,7 +1191,7 @@ export function App() {
                                     {participant.id === snapshot.consultInitiatorId ? ' · Consult initiator' : ''}
                                     {' · '}{participant.held ? 'Held' : participant.state}
                                   </span>
-                                  {participant.id === snapshot.consultInitiatorId && (
+                                  {participant.id === snapshot.consultInitiatorId && !snapshot.consultInitiatorName && (
                                     <code className="participant-identifier" title={snapshot.consultInitiatorId}>
                                       Consulting agent ID · {snapshot.consultInitiatorId}
                                     </code>
@@ -1470,6 +1472,17 @@ export function App() {
                     <span><ControlIcon name="record" /></span>
                     <small>{snapshot.recordingPaused ? 'Resume rec.' : 'Pause rec.'}</small>
                   </button>
+                  {consultReceivedByAgent && snapshot.consultActive && (
+                    <button
+                      className="phone-control leave-conference-control"
+                      disabled={busy !== '' || !snapshot.endConsultCapable}
+                      title={snapshot.endConsultCapable ? 'Leave this consultation' : 'Ending a consultation is disabled by Contact Center policy'}
+                      onClick={() => run('leave-consult', () => controller.endConsult())}
+                    >
+                      <span><ControlIcon name="leave" /></span>
+                      <small>{busy === 'leave-consult' ? 'Leaving…' : 'Leave consult'}</small>
+                    </button>
+                  )}
                   <button
                     className={`phone-control ${activeRouteMode === 'consult' || snapshot.consultActive ? 'active' : ''}`}
                     disabled={busy !== '' || snapshot.consultActive || !snapshot.consultCapable}
@@ -1519,7 +1532,7 @@ export function App() {
                     <small>{busy === 'exit-conference' ? 'Leaving…' : 'Leave conference'}</small>
                   </button>
                 )}
-                {!customerDisconnected && (
+                {!customerDisconnected && !(consultReceivedByAgent && snapshot.consultActive) && (
                   <button
                     className="phone-control decline-call-control end-call-control"
                     disabled={busy !== '' || !snapshot.endCapable}

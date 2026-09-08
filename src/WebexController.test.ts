@@ -517,6 +517,63 @@ describe('WebexController task completion', () => {
     ]));
   });
 
+  it('shows the consulting agent connected on the consulted agent consult leg', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      profile: Profile;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.profile = {agentId: 'agent-2', agentName: 'Agent Two'} as Profile;
+    internal.update({activeTask: task, callStatus: 'connected', consultActive: true});
+    (task.uiControls as any).activeLeg = 'main';
+    (task.uiControls as any).main.endConsult = {isVisible: true, isEnabled: true};
+    Object.assign((task.data as any), {
+      agentId: 'agent-2',
+      consultingAgentId: 'agent-1',
+      isConsulted: true,
+      consultMediaResourceId: 'consult-1',
+      interaction: {
+        owner: 'agent-1',
+        state: 'consulting',
+        mainInteractionId: 'interaction-1',
+        participants: {
+          'agent-1': {id: 'agent-1', pType: 'Agent', name: 'Agent One', hasJoined: true},
+          'agent-2': {id: 'agent-2', pType: 'Agent', name: 'Agent Two', hasJoined: true, isConsulted: true},
+          'customer-1': {id: 'customer-1', pType: 'Customer', name: 'Caller One', hasJoined: true},
+        },
+        media: {
+          'interaction-1': {
+            mediaResourceId: 'interaction-1',
+            mType: 'mainCall',
+            participants: ['agent-1', 'customer-1'],
+            isHold: true,
+          },
+          'consult-1': {
+            mediaResourceId: 'consult-1',
+            mType: 'consult',
+            participants: ['agent-1', 'agent-2'],
+            isHold: false,
+          },
+        },
+      },
+    });
+    observeTask(controller, task);
+
+    task.emitTest('task:consulting');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      endConsultCapable: true,
+      consultInitiatorId: 'agent-1',
+    });
+    expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
+      expect.objectContaining({id: 'agent-1', state: 'Connected', held: false}),
+      expect.objectContaining({id: 'customer-1', state: 'Held', held: true}),
+    ]));
+  });
+
   it('uses the authoritative participant snapshot and marks only a departed customer', () => {
     const controller = new WebexController();
     const task = fakeTask(false);
@@ -693,11 +750,80 @@ describe('WebexController task completion', () => {
       endCapable: false,
       exitConferenceCapable: false,
     });
-    expect(controller.getSnapshot().participants).toEqual([
-      expect.objectContaining({id: 'agent-1', state: 'Disconnected', held: false}),
-      expect.objectContaining({id: 'agent-2', state: 'Disconnected', held: false}),
-      expect.objectContaining({id: 'customer-1', state: 'Disconnected', held: false}),
-    ]);
+    expect(controller.getSnapshot().participants).toEqual([]);
+  });
+
+  it('moves a departed primary conference agent into wrap-up without stale participants', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      profile: Profile;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    internal.update({conferenceActive: true, callStatus: 'connected', activeTask: task});
+    Object.assign((task.data as any), {
+      agentId: 'agent-1',
+      type: 'ParticipantLeftConference',
+      participantId: 'agent-1',
+      isConsulted: false,
+      interaction: {
+        owner: 'agent-1',
+        state: 'conference',
+        mainInteractionId: 'interaction-1',
+        participants: {
+          'agent-1': {id: 'agent-1', pType: 'Agent', name: 'Agent One', hasJoined: true, hasLeft: true},
+          'customer-1': {id: 'customer-1', pType: 'Customer', name: 'Caller One', hasJoined: true},
+        },
+        media: {
+          'interaction-1': {
+            mediaResourceId: 'interaction-1',
+            mType: 'mainCall',
+            participants: ['customer-1'],
+            isHold: false,
+          },
+        },
+      },
+    });
+    observeTask(controller, task);
+
+    task.emitTest('task:participantLeft');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'wrap-up',
+      conferenceActive: false,
+      participants: [],
+    });
+  });
+
+  it('uses conference ownership as the wrap-up fallback when the pending list is empty', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      profile: Profile;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    internal.update({conferenceActive: true, callStatus: 'connected', activeTask: task});
+    Object.assign((task.data as any), {
+      agentId: 'agent-1',
+      type: 'ContactEnded',
+      agentsPendingWrapUp: [],
+      interaction: {owner: 'agent-1', state: 'ended', isTerminated: true},
+    });
+    observeTask(controller, task);
+
+    task.emitTest('task:ui-controls-updated');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'wrap-up',
+      conferenceActive: false,
+      participants: [],
+    });
   });
 
   it('clears a terminal conference for an agent not pending wrap-up', () => {
