@@ -238,6 +238,78 @@ describe('WebexController station login', () => {
 });
 
 describe('WebexController task completion', () => {
+  it('identifies the consulting agent on the consulted agent offer', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const listeners = new Map<string, (...args: any[]) => void>();
+    Object.assign((task.data as any), {
+      type: 'AgentOfferConsult',
+      agentId: 'agent-2',
+      consultingAgentId: 'agent-1',
+      isConsulted: true,
+      interaction: {
+        state: 'new',
+        callProcessingDetails: {parent_Agent_Name: 'Agent One'},
+        participants: {},
+        media: {},
+      },
+    });
+    const internal = controller as unknown as {
+      cc: {on: (event: string, listener: (...args: any[]) => void) => void};
+      profile: Profile;
+      attachContactCenterListeners: () => void;
+    };
+    internal.cc = {on: (event, listener) => listeners.set(event, listener)};
+    internal.profile = {agentId: 'agent-2', agentName: 'Agent Two'} as Profile;
+    internal.attachContactCenterListeners();
+
+    listeners.get('task:incoming')?.(task);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'ringing',
+      consultActive: true,
+      consultStatus: 'connecting',
+      consultInitiatorId: 'agent-1',
+      consultInitiatorName: 'Agent One',
+    });
+  });
+
+  it('identifies the consulting agent on the initiating agent task', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    Object.assign((task.data as any), {
+      type: 'AgentConsultCreated',
+      agentId: 'agent-1',
+      destAgentId: 'agent-2',
+      destinationType: 'Agent',
+      interaction: {
+        state: 'consulting',
+        participants: {
+          'agent-1': {id: 'agent-1', pType: 'Agent', name: 'Agent One', hasJoined: true},
+          'agent-2': {id: 'agent-2', pType: 'Agent', name: 'Agent Two', hasJoined: false},
+        },
+        media: {},
+      },
+    });
+    const internal = controller as unknown as {
+      task: ITask;
+      profile: Profile;
+    };
+    internal.task = task;
+    internal.profile = {agentId: 'agent-1', agentName: 'Agent One'} as Profile;
+    observeTask(controller, task);
+
+    task.emitTest('task:ui-controls-updated');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      consultActive: true,
+      consultStatus: 'connecting',
+      consultInitiatorId: 'agent-1',
+      consultInitiatorName: 'Agent One',
+      consultDestinationId: 'agent-2',
+    });
+  });
+
   it('ends the ringing presentation and enters RONA when an offer is rejected by routing', () => {
     const controller = new WebexController();
     const task = fakeTask(false);

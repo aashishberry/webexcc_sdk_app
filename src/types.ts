@@ -154,6 +154,8 @@ export interface ControllerSnapshot {
   consultActive: boolean;
   consultStatus: ConsultStatus;
   conferenceActive: boolean;
+  consultInitiatorId: string;
+  consultInitiatorName: string;
   consultDestinationId: string;
   consultDestinationType: CallDestination['type'] | '';
   consultDestinationName: string;
@@ -256,6 +258,8 @@ export const initialSnapshot: ControllerSnapshot = {
   consultActive: false,
   consultStatus: 'none',
   conferenceActive: false,
+  consultInitiatorId: '',
+  consultInitiatorName: '',
   consultDestinationId: '',
   consultDestinationType: '',
   consultDestinationName: '',

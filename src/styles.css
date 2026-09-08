@@ -211,7 +211,11 @@ input:focus { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf20; }
 .live-chip.is-pending { color: light-dark(#805600, #f2d184); background: light-dark(#fff4d8, #433515); }
 .live-chip.is-pending i { background: #d89012; animation: status-pulse 1.4s ease-in-out infinite; }
 @keyframes status-pulse { 50% { opacity: .35; transform: scale(.78); } }
-.participant-list, .participant-manager { display: grid; gap: 8px; }
+.consult-origin { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 3px 8px; border: 1px solid light-dark(#c9ddea, #35596c); border-radius: 10px; padding: 9px 11px; background: light-dark(#ffffffa6, #1a303d); }
+.consult-origin > span { color: light-dark(#657681, #a5b3be); font-size: 9px; font-weight: 720; text-transform: uppercase; letter-spacing: .08em; }
+.consult-origin > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.consult-origin > code { grid-column: 1 / -1; overflow: hidden; text-overflow: ellipsis; color: light-dark(#49616f, #b3c6d2); font: 9px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: nowrap; user-select: all; }
+.participant-list { display: grid; gap: 8px; }
 .participant-row { min-width: 0; display: flex; align-items: center; gap: 10px; border-radius: 10px; padding: 10px; background: light-dark(#ffffffc7, #1d303b); }
 .participant-avatar { width: 35px; height: 35px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid light-dark(#c2dae8, #3c657a); border-radius: 50%; color: light-dark(#12628c, #a8e0fb); background: light-dark(#dbeefa, #22475b); font-size: 10px; font-weight: 800; }
 .participant-row > div { min-width: 0; flex: 1; display: grid; gap: 2px; }
@@ -223,16 +227,11 @@ input:focus { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf20; }
 .pending-chip { color: light-dark(#805600, #f2d184); }
 .consult-drop-button { display: inline-flex; align-items: center; gap: 5px; }
 .consult-drop-button .control-icon { width: 15px; height: 15px; transform: rotate(135deg); }
-.conference-people { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 4px 0; }
-.conference-people > div { min-width: 0; display: grid; justify-items: center; gap: 4px; text-align: center; }
-.conference-people .participant-avatar { width: 48px; height: 48px; }
-.conference-people strong, .conference-people small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conference-people strong { font-size: 11px; }
-.conference-people small { color: light-dark(#657681, #a5b3be); font-size: 9px; }
-.conference-people .participant-disconnected { opacity: .62; }
-.conference-people .participant-disconnected .participant-avatar { filter: grayscale(1); }
+.conference-participant-list { max-height: min(330px, 42vh); overflow-y: auto; padding-right: 2px; }
+.participant-disconnected { opacity: .62; }
+.participant-disconnected .participant-avatar { filter: grayscale(1); }
+.participant-identifier { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: light-dark(#49616f, #b3c6d2); font: 9px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: nowrap; user-select: all; }
 .speaking-avatar { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf24; }
-.participant-manager { border-top: 1px solid light-dark(#cbdde8, #315263); padding-top: 12px; }
 .drop-participant { flex: 0 0 auto; border: 1px solid light-dark(#efc3c8, #74404a); border-radius: 8px; padding: 6px 9px; color: light-dark(#9a2833, #ffabb3); background: light-dark(#fff1f2, #3d2026); font-size: 10px; }
 .drop-participant:disabled { cursor: not-allowed; opacity: .55; }
 .participant-api-note { margin: 1px 2px 0; color: light-dark(#657681, #a5b3be); font-size: 10px; line-height: 1.4; }
@@ -305,8 +304,6 @@ input:focus { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf20; }
   .station-details-card { padding: 13px; }
   .mobile-call-controls { gap: 15px 4px; }
   .phone-control > span { width: 49px; height: 49px; }
-  .conference-people { gap: 5px; }
-  .conference-people .participant-avatar { width: 43px; height: 43px; }
   .participant-row { padding: 9px 8px; }
   .performance-section { padding: 14px; }
 }
@@ -606,5 +603,4 @@ button, input, textarea { font: inherit; }
   .call-control-dock .end-call-control { flex-basis: 96px; min-width: 82px; }
   .dock-wrapup { grid-template-columns: 1fr; }
   .dock-wrapup .button { width: 100%; }
-  .conference-people { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

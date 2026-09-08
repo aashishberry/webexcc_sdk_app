@@ -84,7 +84,6 @@ export function App() {
   const [routeTaskId, setRouteTaskId] = useState('');
   const [destinationId, setDestinationId] = useState('');
   const [summaryFocusRequest, setSummaryFocusRequest] = useState(0);
-  const [participantsTaskId, setParticipantsTaskId] = useState('');
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [clock, setClock] = useState(0);
   const [banner, setBanner] = useState<{kind: 'error'; message: string}>();
@@ -242,8 +241,7 @@ export function App() {
   const consultConnecting = snapshot.consultStatus === 'connecting';
   const consultInitiatedByAgent =
     snapshot.consultActive && snapshot.activeTask?.data?.isConsulted !== true;
-  const participantsOpen =
-    snapshot.conferenceActive && participantsTaskId === snapshot.interactionId;
+  const consultReceivedByAgent = snapshot.activeTask?.data?.isConsulted === true;
   const stateChangeDisabled =
     busy !== '' || ['ringing', 'answering'].includes(snapshot.callStatus);
   const queuedIdleState = snapshot.agentState !== 'Available'
@@ -420,34 +418,43 @@ export function App() {
   const activeParticipantCount = displayParticipants.filter(
     (participant) => participant.state !== 'Disconnected',
   ).length;
-  const customerParticipant = displayParticipants.find(
-    (participant) => participant.type === 'Customer',
+  const consultInitiatorParticipant = displayParticipants.find(
+    (participant) => participant.id === snapshot.consultInitiatorId,
   );
-  const consultParticipant = displayParticipants.find(
-    (participant) =>
+  const consultInitiatorLabel = consultInitiatorParticipant?.isCurrentAgent
+    ? 'You'
+    : snapshot.consultInitiatorName || consultInitiatorParticipant?.name || 'Consulting agent';
+  const consultDisplayParticipants = [...displayParticipants];
+  if (
+    snapshot.consultInitiatorId &&
+    !consultDisplayParticipants.some((participant) => participant.id === snapshot.consultInitiatorId)
+  ) {
+    consultDisplayParticipants.push({
+      id: snapshot.consultInitiatorId,
+      name: snapshot.consultInitiatorName || 'Consulting agent',
+      type: 'Agent',
+      state: consultConnecting ? 'Invited' : 'Connected',
+      held: false,
+      isCurrentAgent: false,
+    });
+  }
+  if (
+    consultInitiatedByAgent &&
+    (snapshot.consultDestinationId || snapshot.consultDestinationName) &&
+    !consultDisplayParticipants.some((participant) =>
       participant.id === snapshot.consultDestinationId ||
-      (
-        !participant.isCurrentAgent &&
-        participant.type !== 'Customer' &&
-        participant.name === snapshot.consultDestinationName
-      ),
-  ) ?? displayParticipants.find(
-    (participant) => !participant.isCurrentAgent && participant.type === 'Agent',
-  );
-  const customerConsultHeld = customerParticipant?.held ?? snapshot.activeLeg === 'consult';
-  const customerConsultState = customerParticipant?.state === 'Disconnected'
-    ? 'Disconnected'
-    : customerConsultHeld
-      ? 'On hold'
-      : 'Connected';
-  const consultDestinationHeld = consultParticipant?.held ?? snapshot.activeLeg === 'main';
-  const consultDestinationState = consultConnecting
-    ? 'Waiting'
-    : consultParticipant?.state === 'Disconnected'
-      ? 'Disconnected'
-      : consultDestinationHeld
-        ? 'On hold'
-        : 'Connected';
+      participant.name === snapshot.consultDestinationName
+    )
+  ) {
+    consultDisplayParticipants.push({
+      id: snapshot.consultDestinationId || 'consult',
+      name: snapshot.consultDestinationName || 'Consult destination',
+      type: snapshot.consultDestinationType === 'queue' ? 'Queue' : 'Agent',
+      state: consultConnecting ? 'Invited' : 'Connected',
+      held: false,
+      isCurrentAgent: false,
+    });
+  }
   const customerDisconnected = snapshot.conferenceActive && (
     snapshot.customerLeft || displayParticipants.some(
       (participant) => participant.type === 'Customer' && participant.state === 'Disconnected',
@@ -564,7 +571,6 @@ export function App() {
     setRouteMode('');
     setRouteTaskId('');
     setDestinationId('');
-    setParticipantsTaskId('');
     setForm({accessToken: ''});
     setExtension('');
   };
@@ -1102,7 +1108,9 @@ export function App() {
                             <div>
                               <span className="section-kicker">Consultation</span>
                               <strong>
-                                {consultConnecting
+                                {consultReceivedByAgent && snapshot.callStatus === 'ringing'
+                                  ? 'Consult request waiting for your answer'
+                                  : consultConnecting
                                   ? 'Waiting for destination to answer'
                                   : snapshot.activeLeg === 'main'
                                     ? 'Speaking with customer'
@@ -1113,37 +1121,53 @@ export function App() {
                               <i />{consultConnecting ? 'Connecting' : 'Connected'}
                             </span>
                           </div>
+                          {snapshot.consultInitiatorId && (
+                            <div className="consult-origin" aria-label="Consult initiator">
+                              <span>Initiated by</span>
+                              <strong>{consultInitiatorLabel}</strong>
+                              <code title={snapshot.consultInitiatorId}>{snapshot.consultInitiatorId}</code>
+                            </div>
+                          )}
                           <div className="participant-list">
-                            <div className="participant-row">
-                              <span className="participant-avatar">{snapshot.callerName.charAt(0) || 'C'}</span>
-                              <div><strong>{snapshot.callerName || 'Customer'}</strong><span>{snapshot.callerNumber || 'Contact Center caller'} · {customerConsultState}</span></div>
-                              <span className={customerConsultHeld ? 'held-chip' : customerConsultState === 'Connected' ? 'connected-chip' : 'neutral-chip'}>
-                                {customerConsultHeld ? 'Held' : customerConsultState}
-                              </span>
-                            </div>
-                            <div className="participant-row">
-                              <span className="participant-avatar">{snapshot.consultDestinationName.charAt(0) || 'A'}</span>
-                              <div>
-                                <strong>{snapshot.consultDestinationName || 'Consult destination'}</strong>
-                                <span>
-                                  {snapshot.consultDestinationType === 'queue' ? 'Consult queue' : 'Consult agent'} · {consultDestinationState}
-                                </span>
-                              </div>
-                              {consultInitiatedByAgent ? (
-                                <button
-                                  type="button"
-                                  className="drop-participant consult-drop-button"
-                                  disabled={busy !== '' || (!consultConnecting && !snapshot.endConsultCapable)}
-                                  onClick={() => run(consultConnecting ? 'cancel-consult' : 'end-consult', () => controller.endConsult())}
-                                >
-                                  <ControlIcon name="phone" /> {consultConnecting ? 'Cancel' : 'Drop'}
-                                </button>
-                              ) : (
-                                <span className={consultConnecting ? 'pending-chip' : consultDestinationHeld ? 'held-chip' : consultDestinationState === 'Connected' ? 'connected-chip' : 'neutral-chip'}>
-                                  {consultDestinationHeld ? 'Held' : consultDestinationState}
-                                </span>
-                              )}
-                            </div>
+                            {consultDisplayParticipants.map((participant) => {
+                              const participantState = participant.held
+                                ? 'Held'
+                                : participant.state === 'Invited'
+                                  ? 'Waiting'
+                                  : participant.state;
+                              const canEndConsultParticipant =
+                                consultInitiatedByAgent &&
+                                !participant.isCurrentAgent &&
+                                participant.type !== 'Customer' &&
+                                participant.id !== snapshot.consultInitiatorId;
+                              return (
+                                <div className={`participant-row ${participant.state === 'Disconnected' ? 'participant-disconnected' : ''}`} key={participant.id}>
+                                  <span className="participant-avatar">{participant.name.charAt(0) || 'P'}</span>
+                                  <div>
+                                    <strong>{participant.isCurrentAgent ? 'You' : participant.name}</strong>
+                                    <span>
+                                      {participant.type}
+                                      {participant.id === snapshot.consultInitiatorId ? ' · Consult initiator' : ''}
+                                      {' · '}{participantState}
+                                    </span>
+                                  </div>
+                                  {canEndConsultParticipant ? (
+                                    <button
+                                      type="button"
+                                      className="drop-participant consult-drop-button"
+                                      disabled={busy !== '' || (!consultConnecting && !snapshot.endConsultCapable)}
+                                      onClick={() => run(consultConnecting ? 'cancel-consult' : 'end-consult', () => controller.endConsult())}
+                                    >
+                                      <ControlIcon name="phone" /> {consultConnecting ? 'Cancel' : 'Drop'}
+                                    </button>
+                                  ) : (
+                                    <span className={participantState === 'Waiting' ? 'pending-chip' : participantState === 'Held' ? 'held-chip' : participantState === 'Connected' ? 'connected-chip' : 'neutral-chip'}>
+                                      {participant.isCurrentAgent ? 'You' : participantState}
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       )}
@@ -1154,38 +1178,39 @@ export function App() {
                             <div><span className="section-kicker">Conference</span><strong>{customerDisconnected ? 'Customer left' : 'Connected'}</strong></div>
                             <span className="live-chip"><i />{activeParticipantCount} active participants</span>
                           </div>
-                          <div className="conference-people" aria-label="Conference participants">
+                          <div className="participant-list conference-participant-list" aria-label="Conference participants">
                             {displayParticipants.map((participant) => (
-                              <div className={participant.state === 'Disconnected' ? 'participant-disconnected' : ''} key={participant.id}>
+                              <div className={`participant-row ${participant.state === 'Disconnected' ? 'participant-disconnected' : ''}`} key={participant.id}>
                                 <span className="participant-avatar">{participant.name.charAt(0) || 'P'}</span>
-                                <strong>{participant.isCurrentAgent ? 'You' : participant.name}</strong>
-                                <small>{participant.held ? 'Held' : participant.state}</small>
+                                <div>
+                                  <strong>{participant.isCurrentAgent ? 'You' : participant.name}</strong>
+                                  <span>
+                                    {participant.type}
+                                    {participant.id === snapshot.consultInitiatorId ? ' · Consult initiator' : ''}
+                                    {' · '}{participant.held ? 'Held' : participant.state}
+                                  </span>
+                                  {participant.id === snapshot.consultInitiatorId && (
+                                    <code className="participant-identifier" title={snapshot.consultInitiatorId}>
+                                      Consulting agent ID · {snapshot.consultInitiatorId}
+                                    </code>
+                                  )}
+                                </div>
+                                {participant.state === 'Disconnected' ? (
+                                  <span className="neutral-chip">Left</span>
+                                ) : participant.isCurrentAgent ? (
+                                  <span className="neutral-chip">You</span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="drop-participant"
+                                    disabled={busy !== '' || !participant.id || participant.id === 'customer' || participant.id === 'consult'}
+                                    title={participant.id === 'customer' || participant.id === 'consult' ? 'Participant data is still being synchronized by the SDK.' : 'Drop participant'}
+                                    onClick={() => void run('drop-participant', () => controller.dropConferenceParticipant(participant.id))}
+                                  >Drop</button>
+                                )}
                               </div>
                             ))}
                           </div>
-                          {participantsOpen && (
-                            <div className="participant-manager" aria-label="Manage conference participants">
-                              {displayParticipants.map((participant) => (
-                                <div className="participant-row" key={participant.id}>
-                                  <span className="participant-avatar">{participant.name.charAt(0) || 'P'}</span>
-                                  <div><strong>{participant.isCurrentAgent ? 'You' : participant.name}</strong><span>{participant.type} · {participant.held ? 'Held' : participant.state}</span></div>
-                                  {participant.state === 'Disconnected' ? (
-                                    <span className="neutral-chip">Left</span>
-                                  ) : participant.isCurrentAgent ? (
-                                    <span className="neutral-chip">Host</span>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      className="drop-participant"
-                                      disabled={busy !== '' || !participant.id || participant.id === 'customer' || participant.id === 'consult'}
-                                      title={participant.id === 'customer' || participant.id === 'consult' ? 'Participant data is still being synchronized by the SDK.' : 'Drop participant'}
-                                      onClick={() => void run('drop-participant', () => controller.dropConferenceParticipant(participant.id))}
-                                    >Drop</button>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          )}
                         </div>
                       )}
 
@@ -1317,7 +1342,6 @@ export function App() {
                     )}
                     {snapshot.conferenceCapable && (
                       <button className="phone-control conference-control" disabled={busy !== ''} onClick={() => {
-                        setParticipantsTaskId('');
                         void run('conference', () => controller.startConference());
                       }}>
                         <span><ControlIcon name="conference" /></span>
@@ -1458,21 +1482,6 @@ export function App() {
                     <span><ControlIcon name="consult" /></span>
                     <small>Consult</small>
                   </button>
-                  {snapshot.conferenceActive && (
-                    <button
-                      className={`phone-control ${participantsOpen ? 'active' : ''}`}
-                      disabled={busy !== ''}
-                      aria-expanded={participantsOpen}
-                      onClick={() => {
-                        setRouteMode('');
-                        setDialpadTaskId('');
-                        setParticipantsTaskId(participantsOpen ? '' : snapshot.interactionId);
-                      }}
-                    >
-                      <span><ControlIcon name="participants" /></span>
-                      <small>Participants</small>
-                    </button>
-                  )}
                   {snapshot.conferenceActive && snapshot.transferConferenceCapable ? (
                     <button
                       className="phone-control transfer-control"
@@ -1504,7 +1513,6 @@ export function App() {
                     title="Leave the conference without ending it for the other participants."
                     onClick={() => void run('exit-conference', async () => {
                       await controller.exitConference();
-                      setParticipantsTaskId('');
                     })}
                   >
                     <span><ControlIcon name="leave" /></span>

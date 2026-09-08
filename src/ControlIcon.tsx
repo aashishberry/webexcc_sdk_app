@@ -7,7 +7,6 @@ type ControlIconName =
   | 'record'
   | 'consult'
   | 'conference'
-  | 'participants'
   | 'transfer'
   | 'phone'
   | 'headset'
@@ -33,7 +32,6 @@ const paths: Record<ControlIconName, React.ReactNode> = {
   record: <><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/></>,
   consult: <><circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 8h5M18.5 5.5v5"/></>,
   conference: <><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M2.5 19a5.5 5.5 0 0 1 11 0M14 19a4.5 4.5 0 0 1 7.5-3.3"/></>,
-  participants: <><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19a6 6 0 0 1 12 0M15 14.5a5 5 0 0 1 6 4.5"/></>,
   transfer: <><path d="M5 7h12M14 4l3 3-3 3M19 17H7M10 14l-3 3 3 3"/></>,
   phone: <><path d="M7 4 4.5 6.5c1.2 6.5 6.5 11.8 13 13L20 17l-4-3-2 2c-2.4-1-4.9-3.5-6-6l2-2-3-4Z"/></>,
   headset: <><path d="M4 13v-2a8 8 0 0 1 16 0v2"/><path d="M4 13h3v6H5a2 2 0 0 1-2-2v-2a2 2 0 0 1 1-2ZM20 13h-3v6h2a2 2 0 0 0 2-2v-2a2 2 0 0 0-1-2ZM17 19c0 1.7-1.3 3-3 3h-2"/></>,

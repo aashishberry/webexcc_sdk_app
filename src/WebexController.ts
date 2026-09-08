@@ -232,6 +232,43 @@ function interactionParticipants(
   return currentParticipants;
 }
 
+function consultInitiator(
+  task: ITask,
+  currentAgentId = '',
+  currentAgentName = '',
+  destinations: ControllerSnapshot['destinations'] = [],
+  previous: {id: string; name: string} = {id: '', name: ''},
+): {consultInitiatorId: string; consultInitiatorName: string} {
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
+  const interaction = data.interaction ?? {};
+  const interactionType = firstText(data.type);
+  const initiatorId = firstText(
+    data.consultingAgentId,
+    interactionType === 'AgentConsultCreated' ? data.agentId : '',
+    previous.id,
+  );
+  if (!initiatorId) return {consultInitiatorId: '', consultInitiatorName: ''};
+
+  const initiator = Object.entries(interaction.participants ?? {}).find(([key, value]) => {
+    const participant = value as Record<string, any>;
+    return firstText(participant.id, participant.participantId, participant.pId, participant.agentId, key) === initiatorId;
+  })?.[1] as Record<string, any> | undefined;
+  const details = interaction.callProcessingDetails ?? data.callProcessingDetails ?? {};
+  const initiatorName = firstText(
+    initiator?.name,
+    initiator?.pName,
+    initiatorId === currentAgentId ? currentAgentName : '',
+    destinations.find((destination) => destination.id === initiatorId)?.name,
+    data.isConsulted === true ? details.parent_Agent_Name : '',
+    previous.id === initiatorId ? previous.name : '',
+  );
+
+  return {
+    consultInitiatorId: initiatorId,
+    consultInitiatorName: initiatorName,
+  };
+}
+
 const disabledTaskControls = {
   acceptCapable: false,
   declineCapable: false,
@@ -1542,9 +1579,17 @@ export class WebexController {
     this.cc.on('task:incoming', (task: ITask) => {
       this.task = task;
       this.attachTaskListeners(task);
+      const data = (task.data ?? {}) as unknown as Record<string, any>;
       const interactionId = task.data.interactionId;
       const context = interactionContext(task);
       const offeredAt = taskEventAt(task) || Date.now();
+      const isConsultOffer = data.isConsulted === true || firstText(data.type) === 'AgentOfferConsult';
+      const initiator = consultInitiator(
+        task,
+        this.profile?.agentId,
+        this.profile?.agentName,
+        this.snapshot.destinations,
+      );
       this.update({
         activeTask: task,
         interactionId,
@@ -1565,9 +1610,10 @@ export class WebexController {
         recordingActive: recordingActive(task),
         recordingPauseCapable: recordingPauseEnabled(task),
         recordingPaused: recordingPaused(task),
-        consultActive: false,
-        consultStatus: 'none',
+        consultActive: isConsultOffer,
+        consultStatus: isConsultOffer ? 'connecting' : 'none',
         conferenceActive: false,
+        ...initiator,
         consultDestinationId: '',
         consultDestinationType: '',
         consultDestinationName: '',
@@ -1669,6 +1715,13 @@ export class WebexController {
         this.snapshot.destinations.find((destination) => destination.id === consultDestinationId)?.name ||
         ''
       : '';
+    const initiator = consultInitiator(
+      task,
+      this.profile?.agentId,
+      this.profile?.agentName,
+      this.snapshot.destinations,
+      {id: this.snapshot.consultInitiatorId, name: this.snapshot.consultInitiatorName},
+    );
 
     this.update({
       activeTask: task,
@@ -1694,6 +1747,7 @@ export class WebexController {
       consultActive,
       consultStatus: consultActive ? (consultConnected ? 'connected' : 'connecting') : 'none',
       conferenceActive,
+      ...initiator,
       consultDestinationId,
       consultDestinationType: consultActive
         ? this.snapshot.consultDestinationType || consultDestinationType
@@ -1729,6 +1783,13 @@ export class WebexController {
     const authoritativeHeld = taskActiveLegHeld(task);
     const held = authoritativeHeld ?? this.snapshot.held;
     const participants = interactionParticipants(task, this.profile?.agentId);
+    const initiator = consultInitiator(
+      task,
+      this.profile?.agentId,
+      this.profile?.agentName,
+      this.snapshot.destinations,
+      {id: this.snapshot.consultInitiatorId, name: this.snapshot.consultInitiatorName},
+    );
     const hasConnectedCustomer = participants.some(
       (participant) => participant.type === 'Customer' && participant.state !== 'Disconnected',
     );
@@ -1746,6 +1807,7 @@ export class WebexController {
       interactionContext: interactionContext(task),
       participants,
       customerLeft,
+      ...initiator,
       ...patch,
     });
   }
@@ -1761,6 +1823,13 @@ export class WebexController {
     return {
       consultActive: true,
       consultStatus: status,
+      ...consultInitiator(
+        task,
+        this.profile?.agentId,
+        this.profile?.agentName,
+        this.snapshot.destinations,
+        {id: this.snapshot.consultInitiatorId, name: this.snapshot.consultInitiatorName},
+      ),
       consultDestinationId: destinationId,
       consultDestinationType: destinationType,
       consultDestinationName:
@@ -1773,6 +1842,8 @@ export class WebexController {
     return {
       consultActive: false,
       consultStatus: 'none',
+      consultInitiatorId: '',
+      consultInitiatorName: '',
       consultDestinationId: '',
       consultDestinationType: '',
       consultDestinationName: '',
@@ -1854,6 +1925,8 @@ export class WebexController {
       consultActive: false,
       consultStatus: 'none',
       conferenceActive: false,
+      consultInitiatorId: '',
+      consultInitiatorName: '',
       consultDestinationId: '',
       consultDestinationType: '',
       consultDestinationName: '',
@@ -2398,6 +2471,8 @@ export class WebexController {
       consultActive: false,
       consultStatus: 'none',
       conferenceActive: false,
+      consultInitiatorId: '',
+      consultInitiatorName: '',
       consultDestinationId: '',
       consultDestinationType: '',
       consultDestinationName: '',
