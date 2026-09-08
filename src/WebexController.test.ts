@@ -480,7 +480,7 @@ describe('WebexController task completion', () => {
       },
     });
     observeTask(controller, task);
-    task.emitTest('task:participantJoined');
+    task.emitTest('task:ui-controls-updated');
 
     expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
       expect.objectContaining({id: 'customer-1', state: 'Connected'}),
@@ -507,7 +507,7 @@ describe('WebexController task completion', () => {
       hasJoined: true,
       hasLeft: false,
     };
-    task.emitTest('task:participantJoined');
+    task.emitTest('task:ui-controls-updated');
 
     expect(controller.getSnapshot()).toMatchObject({customerLeft: false});
     expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
@@ -551,7 +551,7 @@ describe('WebexController task completion', () => {
       },
     });
     observeTask(controller, task);
-    task.emitTest('task:participantJoined');
+    task.emitTest('task:ui-controls-updated');
 
     (task.data as any).type = 'ContactEnded';
     (task.data as any).interaction.callProcessingDetails = {hasCustomerLeft: true};
@@ -572,6 +572,89 @@ describe('WebexController task completion', () => {
     ]));
     await expect(controller.endCall()).rejects.toThrow('End is not available');
     expect(task.end).not.toHaveBeenCalled();
+  });
+
+  it('disconnects every conference participant and wraps only the pending primary agent', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      profile: Profile;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    internal.update({conferenceActive: true, callStatus: 'connected', activeTask: task});
+    Object.assign((task.data as any), {
+      agentId: 'agent-1',
+      type: 'ContactEnded',
+      eventType: 'RoutingMessage',
+      agentsPendingWrapUp: ['agent-1'],
+      interaction: {
+        owner: 'agent-1',
+        state: 'ended',
+        isTerminated: true,
+        mainInteractionId: 'interaction-1',
+        participants: {
+          'agent-1': {id: 'agent-1', pType: 'Agent', name: 'Agent One', hasJoined: true},
+          'agent-2': {id: 'agent-2', pType: 'Agent', name: 'Agent Two', hasJoined: true},
+          'customer-1': {id: 'customer-1', pType: 'Customer', name: 'Caller One', hasJoined: true},
+        },
+        media: {
+          'interaction-1': {
+            mediaResourceId: 'interaction-1',
+            mType: 'mainCall',
+            participants: ['agent-1', 'agent-2', 'customer-1'],
+            isHold: false,
+          },
+        },
+      },
+    });
+    observeTask(controller, task);
+
+    task.emitTest('task:ui-controls-updated');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'wrap-up',
+      conferenceActive: false,
+      customerLeft: true,
+      endCapable: false,
+      exitConferenceCapable: false,
+    });
+    expect(controller.getSnapshot().participants).toEqual([
+      expect.objectContaining({id: 'agent-1', state: 'Disconnected', held: false}),
+      expect.objectContaining({id: 'agent-2', state: 'Disconnected', held: false}),
+      expect.objectContaining({id: 'customer-1', state: 'Disconnected', held: false}),
+    ]);
+  });
+
+  it('clears a terminal conference for an agent not pending wrap-up', () => {
+    const controller = new WebexController();
+    const task = fakeTask(true);
+    const internal = controller as unknown as {
+      task: ITask;
+      profile: Profile;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.profile = {agentId: 'agent-2'} as Profile;
+    internal.update({conferenceActive: true, callStatus: 'connected', activeTask: task});
+    Object.assign((task.data as any), {
+      agentId: 'agent-2',
+      type: 'ContactEnded',
+      eventType: 'RoutingMessage',
+      agentsPendingWrapUp: ['agent-1'],
+      interaction: {owner: 'agent-1', state: 'ended', isTerminated: true},
+    });
+    observeTask(controller, task);
+
+    task.emitTest('task:ui-controls-updated');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'none',
+      activeTask: undefined,
+      conferenceActive: false,
+    });
   });
 
   it('enables wrap-up when task:end reports wrapUpRequired', () => {
@@ -1300,7 +1383,7 @@ describe('WebexController call controls', () => {
       queueId: 'queue-7',
       destinationType: 'queue',
     });
-    task.emitTest('task:consultCreated');
+    task.emitTest('task:ui-controls-updated');
     await controller.endConsult();
 
     expect(task.consult).toHaveBeenCalledWith({
@@ -1314,7 +1397,8 @@ describe('WebexController call controls', () => {
       queueId: 'queue-7',
     });
     expect(controller.getSnapshot()).toMatchObject({consultActive: true, consultStatus: 'connecting'});
-    task.emitTest('task:consultQueueCancelled');
+    (task.data as any).type = 'AgentCtqCancelled';
+    task.emitTest('task:ui-controls-updated');
     expect(controller.getSnapshot()).toMatchObject({consultActive: false, consultStatus: 'none'});
   });
 

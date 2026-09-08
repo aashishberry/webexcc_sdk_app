@@ -221,8 +221,6 @@ input:focus { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf20; }
 .held-chip { color: light-dark(#8b5c00, #f1ce78); }
 .connected-chip { color: light-dark(#18743b, #8be0ac); }
 .pending-chip { color: light-dark(#805600, #f2d184); }
-.conference-actions .button { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; padding: 9px 8px; font-size: 11px; }
-.conference-actions .control-icon { width: 18px; height: 18px; }
 .consult-drop-button { display: inline-flex; align-items: center; gap: 5px; }
 .consult-drop-button .control-icon { width: 15px; height: 15px; transform: rotate(135deg); }
 .conference-people { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 4px 0; }
@@ -234,7 +232,6 @@ input:focus { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf20; }
 .conference-people .participant-disconnected { opacity: .62; }
 .conference-people .participant-disconnected .participant-avatar { filter: grayscale(1); }
 .speaking-avatar { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf24; }
-.conference-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .participant-manager { border-top: 1px solid light-dark(#cbdde8, #315263); padding-top: 12px; }
 .drop-participant { flex: 0 0 auto; border: 1px solid light-dark(#efc3c8, #74404a); border-radius: 8px; padding: 6px 9px; color: light-dark(#9a2833, #ffabb3); background: light-dark(#fff1f2, #3d2026); font-size: 10px; }
 .drop-participant:disabled { cursor: not-allowed; opacity: .55; }
@@ -295,7 +292,6 @@ input:focus { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf20; }
   .interaction-heading { padding: 12px; }
   .call-card { align-items: flex-start; flex-wrap: wrap; padding: 14px; }
   .mobile-call-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .conference-actions { grid-template-columns: 1fr; }
   .performance-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
@@ -418,7 +414,6 @@ button, input, textarea { font: inherit; }
 .phone-control.active > span { color: white; border: 0; background: transparent; }
 .phone-control.warning-active { color: light-dark(#76500b, #f4cc6a); background: light-dark(#fff2d3, #392b12); }
 .call-actions { min-height: 120px; align-items: center; }
-.conference-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
 .insights-panel { min-width: 0; overflow: hidden; border: 1px solid light-dark(#d8e0e8cc, #41505dcc); border-radius: 14px; background: light-dark(#fff, #111922); }
 .has-insights .insights-panel { grid-column: 2; grid-row: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -527,6 +522,12 @@ button, input, textarea { font: inherit; }
 .consult-dock-status { width: min(680px, 100%); border: 1px solid light-dark(#e3c780, #6f5723); border-radius: 11px; padding: 13px 16px; color: light-dark(#78520b, #efd080); background: light-dark(#fff7df, #332814); text-align: center; font-size: 11px; font-weight: 680; }
 .conference-control { color: light-dark(#126b84, #8de4f3); }
 .transfer-control { color: light-dark(#155f9a, #8bc6fa); }
+.leave-conference-control {
+  color: light-dark(#704d0a, #f0cf82);
+  border-color: light-dark(#d9bd78, #705a28);
+  background: light-dark(#fff8e7, #302817);
+}
+.leave-conference-control > span { color: inherit; }
 .answer-call-control {
   color: light-dark(#12693f, #86ddb1);
   border-color: light-dark(#8bcfaf, #286a4b);
@@ -606,5 +607,4 @@ button, input, textarea { font: inherit; }
   .dock-wrapup { grid-template-columns: 1fr; }
   .dock-wrapup .button { width: 100%; }
   .conference-people { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .conference-actions { grid-template-columns: 1fr; }
 }

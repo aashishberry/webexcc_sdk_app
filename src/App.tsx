@@ -84,7 +84,7 @@ export function App() {
   const [routeTaskId, setRouteTaskId] = useState('');
   const [destinationId, setDestinationId] = useState('');
   const [summaryFocusRequest, setSummaryFocusRequest] = useState(0);
-  const [participantsOpen, setParticipantsOpen] = useState(false);
+  const [participantsTaskId, setParticipantsTaskId] = useState('');
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [clock, setClock] = useState(0);
   const [banner, setBanner] = useState<{kind: 'error'; message: string}>();
@@ -242,6 +242,8 @@ export function App() {
   const consultConnecting = snapshot.consultStatus === 'connecting';
   const consultInitiatedByAgent =
     snapshot.consultActive && snapshot.activeTask?.data?.isConsulted !== true;
+  const participantsOpen =
+    snapshot.conferenceActive && participantsTaskId === snapshot.interactionId;
   const stateChangeDisabled =
     busy !== '' || ['ringing', 'answering'].includes(snapshot.callStatus);
   const queuedIdleState = snapshot.agentState !== 'Available'
@@ -562,7 +564,7 @@ export function App() {
     setRouteMode('');
     setRouteTaskId('');
     setDestinationId('');
-    setParticipantsOpen(false);
+    setParticipantsTaskId('');
     setForm({accessToken: ''});
     setExtension('');
   };
@@ -1161,24 +1163,8 @@ export function App() {
                               </div>
                             ))}
                           </div>
-                          <div className="conference-actions">
-                            <button className="button secondary" disabled={busy !== ''} aria-expanded={participantsOpen} onClick={() => setParticipantsOpen((open) => !open)}>
-                              <ControlIcon name="participants" /> {participantsOpen ? 'Hide participants' : 'Manage participants'}
-                            </button>
-                            <button className="button primary" disabled={busy !== '' || !snapshot.exitConferenceCapable} onClick={() => void run('exit-conference', async () => {
-                              await controller.exitConference();
-                              setParticipantsOpen(false);
-                            })}>
-                              Leave conference
-                            </button>
-                            {snapshot.transferConferenceCapable && (
-                              <button className="button secondary" disabled={busy !== ''} onClick={() => void run('transfer-conference', () => controller.transferConference())}>
-                                <ControlIcon name="transfer" /> Hand over conference
-                              </button>
-                            )}
-                          </div>
                           {participantsOpen && (
-                            <div className="participant-manager">
+                            <div className="participant-manager" aria-label="Manage conference participants">
                               {displayParticipants.map((participant) => (
                                 <div className="participant-row" key={participant.id}>
                                   <span className="participant-avatar">{participant.name.charAt(0) || 'P'}</span>
@@ -1331,7 +1317,7 @@ export function App() {
                     )}
                     {snapshot.conferenceCapable && (
                       <button className="phone-control conference-control" disabled={busy !== ''} onClick={() => {
-                        setParticipantsOpen(false);
+                        setParticipantsTaskId('');
                         void run('conference', () => controller.startConference());
                       }}>
                         <span><ControlIcon name="conference" /></span>
@@ -1480,42 +1466,52 @@ export function App() {
                       onClick={() => {
                         setRouteMode('');
                         setDialpadTaskId('');
-                        setParticipantsOpen((open) => !open);
+                        setParticipantsTaskId(participantsOpen ? '' : snapshot.interactionId);
                       }}
                     >
                       <span><ControlIcon name="participants" /></span>
                       <small>Participants</small>
                     </button>
                   )}
-                  <button
-                    className={`phone-control ${activeRouteMode === 'transfer' ? 'active' : ''}`}
-                    disabled={busy !== '' || snapshot.consultActive || !snapshot.transferCapable}
-                    title={snapshot.conferenceActive && !snapshot.transferCapable
-                      ? 'For a conference handover, consult a destination and then choose Hand over conference'
-                      : 'Transfer the interaction'}
-                    onClick={() => {
-                      setDialpadTaskId('');
-                      void openRoutePanel('transfer');
-                    }}
-                  >
-                    <span><ControlIcon name="transfer" /></span>
-                    <small>Transfer</small>
-                  </button>
+                  {snapshot.conferenceActive && snapshot.transferConferenceCapable ? (
+                    <button
+                      className="phone-control transfer-control"
+                      disabled={busy !== ''}
+                      onClick={() => run('transfer-conference', () => controller.transferConference())}
+                    >
+                      <span><ControlIcon name="transfer" /></span>
+                      <small>Hand over</small>
+                    </button>
+                  ) : !snapshot.conferenceActive ? (
+                    <button
+                      className={`phone-control ${activeRouteMode === 'transfer' ? 'active' : ''}`}
+                      disabled={busy !== '' || snapshot.consultActive || !snapshot.transferCapable}
+                      title="Transfer the interaction"
+                      onClick={() => {
+                        setDialpadTaskId('');
+                        void openRoutePanel('transfer');
+                      }}
+                    >
+                      <span><ControlIcon name="transfer" /></span>
+                      <small>Transfer</small>
+                    </button>
+                  ) : null}
                 </div>
-                {customerDisconnected ? (
+                {snapshot.conferenceActive && (
                   <button
-                    className="phone-control end-call-control"
+                    className="phone-control leave-conference-control end-call-control"
                     disabled={busy !== '' || !snapshot.exitConferenceCapable}
-                    title="The customer has left. Leave the remaining agent conference."
+                    title="Leave the conference without ending it for the other participants."
                     onClick={() => void run('exit-conference', async () => {
                       await controller.exitConference();
-                      setParticipantsOpen(false);
+                      setParticipantsTaskId('');
                     })}
                   >
-                    <span><ControlIcon name="phone" /></span>
+                    <span><ControlIcon name="leave" /></span>
                     <small>{busy === 'exit-conference' ? 'Leaving…' : 'Leave conference'}</small>
                   </button>
-                ) : (
+                )}
+                {!customerDisconnected && (
                   <button
                     className="phone-control decline-call-control end-call-control"
                     disabled={busy !== '' || !snapshot.endCapable}

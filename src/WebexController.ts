@@ -131,6 +131,11 @@ function interactionParticipants(
     ? consultMedia
     : mainMedia;
   const currentAgentId = firstText(agentId, data.agentId);
+  const interactionState = firstText(interaction.state).toLowerCase();
+  const interactionTerminated =
+    interaction.isTerminated === true ||
+    interactionState === 'terminated' ||
+    interactionState === 'ended';
   const customerLeftFlag = String(
     interaction.callProcessingDetails?.hasCustomerLeft ?? data.callProcessingDetails?.hasCustomerLeft ?? '',
   ).toLowerCase() === 'true';
@@ -174,6 +179,7 @@ function interactionParticipants(
         id === inferredCustomerId ||
         participantId === inferredCustomerId;
       const hasLeft =
+        interactionTerminated ||
         participant.hasLeft === true ||
         String(participant.hasLeft).toLowerCase() === 'true' ||
         (isCustomer && customerLeftFlag);
@@ -193,7 +199,7 @@ function interactionParticipants(
             : belongsTo(mainMedia)
               ? mainMedia
               : mediaEntries.find(([, entry]) => belongsTo(entry))?.[1];
-      const isHeld = participantMedia?.isHold === true;
+      const isHeld = !hasLeft && participantMedia?.isHold === true;
       const hasJoined = participant.hasJoined === true || Boolean(participantMedia);
       const rawState = firstText(participant.currentState, participant.consultState);
       const displayState = hasLeft
@@ -225,6 +231,24 @@ function interactionParticipants(
 
   return currentParticipants;
 }
+
+const disabledTaskControls = {
+  acceptCapable: false,
+  declineCapable: false,
+  holdCapable: false,
+  endCapable: false,
+  muteCapable: false,
+  dtmfCapable: false,
+  recordingPauseCapable: false,
+  consultCapable: false,
+  transferCapable: false,
+  switchCapable: false,
+  conferenceCapable: false,
+  consultTransferCapable: false,
+  endConsultCapable: false,
+  exitConferenceCapable: false,
+  transferConferenceCapable: false,
+} as const;
 
 function taskMessageType(task: ITask): string {
   const data = (task.data ?? {}) as unknown as Record<string, any>;
@@ -435,6 +459,41 @@ function taskEndedAt(task: ITask, agentId = ''): number {
     epochMilliseconds(data.endTimestamp) ||
     taskEventAt(task) ||
     epochMilliseconds(participant?.lastUpdated)
+  );
+}
+
+function taskRequiresWrapup(task: ITask, agentId = ''): boolean {
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
+  const interaction = data.interaction ?? {};
+  const currentAgentId = firstText(agentId, data.agentId);
+  const agentsPendingWrapUp = Array.isArray(data.agentsPendingWrapUp)
+    ? data.agentsPendingWrapUp.map(String)
+    : undefined;
+
+  if (agentsPendingWrapUp) return agentsPendingWrapUp.includes(currentAgentId);
+
+  const participant = taskAgentParticipant(task, currentAgentId);
+  const participantState = firstText(participant?.currentState).toLowerCase();
+  if (participant?.isWrapUp === true || participantState.includes('wrap')) return true;
+
+  return data.wrapUpRequired === true && (
+    !currentAgentId ||
+    !interaction.owner ||
+    interaction.owner === currentAgentId
+  );
+}
+
+function isTerminalContactEnded(task: ITask): boolean {
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
+  if (taskMessageType(task) !== 'ContactEnded') return false;
+  const interaction = data.interaction ?? {};
+  const state = firstText(interaction.state).toLowerCase();
+  return (
+    interaction.isTerminated === true ||
+    state === 'terminated' ||
+    state === 'ended' ||
+    state === 'wrapup' ||
+    Array.isArray(data.agentsPendingWrapUp)
   );
 }
 
@@ -1542,6 +1601,13 @@ export class WebexController {
     this.cc.on('task:hydrate', (task: ITask) => {
       this.restoreHydratedTask(task);
     });
+    this.cc.on('task:merged', (task: ITask) => {
+      if (this.task && this.task !== task) return;
+      this.task = task;
+      this.attachTaskListeners(task);
+      this.syncTaskPresentation(task, {}, true);
+      this.log('WxCC task merge reconciled.');
+    });
   }
 
   private restoreHydratedTask(task: ITask): void {
@@ -1748,6 +1814,55 @@ export class WebexController {
     }, true);
   }
 
+  private disconnectedParticipants(task: ITask): InteractionParticipant[] {
+    const current = interactionParticipants(task, this.profile?.agentId);
+    const participants = new Map(
+      [...this.snapshot.participants, ...current].map((participant) => [participant.id, participant]),
+    );
+    return [...participants.values()].map((participant) => ({
+      ...participant,
+      state: 'Disconnected',
+      held: false,
+    }));
+  }
+
+  private reconcileTerminalContactEnded(task: ITask): void {
+    if (this.task !== task) return;
+    const requiresWrapup = taskRequiresWrapup(task, this.profile?.agentId);
+    const endedAt = taskEndedAt(task, this.profile?.agentId) || Date.now();
+    const participants = this.disconnectedParticipants(task);
+    this.stopTranscription(task);
+
+    if (!requiresWrapup) {
+      this.log('WxCC conference interaction ended for this participant.', 'success');
+      this.clearCallState();
+      this.schedulePerformanceRefresh();
+      return;
+    }
+
+    const wrapupStartedAt = taskWrapupStartedAt(task, this.profile?.agentId) || endedAt;
+    this.update({
+      activeTask: task,
+      callStatus: 'wrap-up',
+      callEndedAt: this.snapshot.callEndedAt || endedAt,
+      wrapupStartedAt: this.snapshot.wrapupStartedAt || wrapupStartedAt,
+      participants,
+      customerLeft: true,
+      held: false,
+      recordingActive: false,
+      recordingPaused: false,
+      consultActive: false,
+      consultStatus: 'none',
+      conferenceActive: false,
+      consultDestinationId: '',
+      consultDestinationType: '',
+      consultDestinationName: '',
+      ...disabledTaskControls,
+    });
+    this.log('WxCC conference interaction ended; primary agent entered wrap-up.');
+    this.requestPostCallSummary(task);
+  }
+
   private reconcileRawTaskMessage(task: ITask): void {
     if (this.task !== task) return;
     const data = (task.data ?? {}) as unknown as Record<string, any>;
@@ -1756,11 +1871,61 @@ export class WebexController {
     if (!type || this.reconciledTaskMessages.get(task) === messageKey) return;
     this.reconciledTaskMessages.set(task, messageKey);
 
+    if (type === 'AgentConsultCreated') {
+      this.syncTaskPresentation(task, this.consultPresentation(task, 'connecting'));
+      return;
+    }
     if (type === 'AgentConsultFailed' || type === 'AgentCtqFailed') {
       this.syncTaskPresentation(task, this.clearConsultPresentation(), true);
       const message = this.consultFailureMessage(task);
       this.update({error: message});
       this.log(message, 'error');
+      return;
+    }
+    if (type === 'AgentCtqCancelled') {
+      this.syncTaskPresentation(task, this.clearConsultPresentation(), true);
+      return;
+    }
+    if (type === 'AgentCtqCancelFailed') {
+      this.syncTaskPresentation(task);
+      this.update({error: 'The pending queue consultation could not be cancelled.'});
+      this.log('Cancelling the pending queue consultation failed.', 'error');
+      return;
+    }
+    if (type === 'ContactRecordingPauseFailed' || type === 'ContactRecordingResumeFailed') {
+      const pausing = type === 'ContactRecordingPauseFailed';
+      this.syncTaskPresentation(task);
+      this.update({error: `Contact Center did not ${pausing ? 'pause' : 'resume'} call recording.`});
+      this.log(`${pausing ? 'Pausing' : 'Resuming'} call recording failed.`, 'error');
+      return;
+    }
+    if (type === 'AgentContactUnassigned') {
+      this.stopTranscription(task);
+      this.log('WxCC task was unassigned.', 'warning');
+      this.clearCallState();
+      return;
+    }
+    if (
+      type === 'AgentConsultConferenced' ||
+      type === 'AgentConsultConferencing' ||
+      type === 'ParticipantJoinedConference'
+    ) {
+      this.syncTaskPresentation(
+        task,
+        {
+          consultActive: false,
+          consultStatus: 'none',
+          conferenceActive: true,
+          consultDestinationId: '',
+          consultDestinationType: '',
+          consultDestinationName: '',
+        },
+        true,
+      );
+      return;
+    }
+    if (isTerminalContactEnded(task)) {
+      this.reconcileTerminalContactEnded(task);
       return;
     }
     if (
@@ -1837,21 +2002,7 @@ export class WebexController {
         agentState: 'RONA',
         lifecycle: 'idle',
         stateChangedAt: rejectedAt,
-        acceptCapable: false,
-        declineCapable: false,
-        holdCapable: false,
-        endCapable: false,
-        muteCapable: false,
-        dtmfCapable: false,
-        recordingPauseCapable: false,
-        consultCapable: false,
-        transferCapable: false,
-        switchCapable: false,
-        conferenceCapable: false,
-        consultTransferCapable: false,
-        endConsultCapable: false,
-        exitConferenceCapable: false,
-        transferConferenceCapable: false,
+        ...disabledTaskControls,
       });
       this.log(
         `Contact Center offer redirected after no answer${typeof reason === 'string' && reason ? ` (${reason})` : ''}.`,
@@ -1874,22 +2025,6 @@ export class WebexController {
       if (this.task !== task) return;
       this.syncTaskPresentation(task, {recordingActive: true, recordingPaused: false});
     });
-    task.on('task:recordingPauseFailed', () => {
-      if (this.task !== task) return;
-      this.syncTaskPresentation(task);
-      this.update({error: 'Contact Center did not pause call recording.'});
-      this.log('Pausing call recording failed.', 'error');
-    });
-    task.on('task:recordingResumeFailed', () => {
-      if (this.task !== task) return;
-      this.syncTaskPresentation(task);
-      this.update({error: 'Contact Center did not resume call recording.'});
-      this.log('Resuming call recording failed.', 'error');
-    });
-
-    task.on('task:consultCreated', () =>
-      this.syncTaskPresentation(task, this.consultPresentation(task, 'connecting')),
-    );
     const handleConsultConnected = () =>
       this.syncTaskPresentation(task, this.consultPresentation(task, 'connected'), true);
     task.on('task:consultAccepted', handleConsultConnected);
@@ -1901,19 +2036,9 @@ export class WebexController {
         true,
       );
     task.on('task:consultEnd', handleConsultEnded);
-    task.on('task:consultQueueCancelled', handleConsultEnded);
-    task.on('task:consultQueueFailed', () => {
-      if (this.task !== task) return;
-      this.syncTaskPresentation(task);
-      this.update({error: 'The pending queue consultation could not be cancelled.'});
-      this.log('Cancelling the pending queue consultation failed.', 'error');
-    });
     // Deliberately do not reconcile `task:switchCall`: it reports the SDK's local
     // switch request. AgentContactHeld/AgentContactUnheld confirm the actual leg state.
 
-    task.on('task:conferenceEstablishing', () =>
-      this.syncTaskPresentation(task, {}, true),
-    );
     task.on('task:conferenceStarted', () =>
       this.syncTaskPresentation(
         task,
@@ -1954,25 +2079,10 @@ export class WebexController {
       this.update({error: 'Contact Center could not hand off the conference.'});
       this.log('Conference handoff failed.', 'error');
     });
-    task.on('task:conferenceEndFailed', () => {
-      if (this.task !== task) return;
-      this.syncTaskPresentation(task, {}, true);
-      this.update({error: 'Contact Center could not end the conference.'});
-      this.log('Ending the conference failed.', 'error');
-    });
-    task.on('task:participantLeftFailed', () => {
-      if (this.task !== task) return;
-      this.syncTaskPresentation(task, {}, true);
-      this.update({error: 'Contact Center could not remove the conference participant.'});
-      this.log('Removing a conference participant failed.', 'error');
-    });
-    task.on('task:participantJoined', () => this.syncTaskPresentation(task, {}, true));
     task.on('task:participantLeft', () => {
       this.reconcileParticipantDeparture(task);
       this.log('Conference participant departure reconciled.');
     });
-    task.on('task:merged', () => this.syncTaskPresentation(task, {}, true));
-    task.on('task:conferenceTransferred', () => this.syncTaskPresentation(task, {}, true));
     task.on('task:exitConference', () => this.syncTaskPresentation(task, {}, true));
     task.on('task:transferConference', () => this.syncTaskPresentation(task, {}, true));
     task.on('task:postCallActivity', () => this.syncTaskPresentation(task));
@@ -2030,12 +2140,6 @@ export class WebexController {
         },
         active,
       );
-    });
-    task.on('task:unassigned', () => {
-      if (this.task !== task) return;
-      this.stopTranscription(task);
-      this.log('WxCC task was unassigned.', 'warning');
-      this.clearCallState();
     });
     task.on('REAL_TIME_TRANSCRIPTION', (payload: unknown) => {
       if (this.task !== task) return;
@@ -2099,12 +2203,21 @@ export class WebexController {
       const endedAt = taskEndedAt(currentTask, this.profile?.agentId) || Date.now();
       this.stopTranscription(currentTask);
 
-      if (currentTask.data.wrapUpRequired) {
+      if (taskRequiresWrapup(currentTask, this.profile?.agentId)) {
         this.update({
           activeTask: currentTask,
           callStatus: 'wrap-up',
           callEndedAt: this.snapshot.callEndedAt || endedAt,
           wrapupStartedAt: this.snapshot.wrapupStartedAt || endedAt,
+          participants: this.disconnectedParticipants(currentTask),
+          customerLeft: true,
+          held: false,
+          recordingActive: false,
+          recordingPaused: false,
+          consultActive: false,
+          consultStatus: 'none',
+          conferenceActive: false,
+          ...disabledTaskControls,
         });
         this.log('WxCC task ended; waiting for wrap-up.');
         this.requestPostCallSummary(currentTask);
@@ -2115,9 +2228,6 @@ export class WebexController {
       this.clearCallState();
       this.schedulePerformanceRefresh();
     });
-    task.on('task:error', (error: unknown) =>
-      this.log(`WxCC task error: ${errorMessage(error)}`, 'error'),
-    );
   }
 
   private async restoreHistoricTranscripts(task: ITask): Promise<void> {
@@ -2279,25 +2389,11 @@ export class WebexController {
       interactionContext: structuredClone(initialSnapshot.interactionContext),
       participants: [],
       customerLeft: false,
-      acceptCapable: false,
-      declineCapable: false,
-      holdCapable: false,
-      endCapable: false,
+      ...disabledTaskControls,
       muted: false,
       held: false,
-      muteCapable: false,
-      dtmfCapable: false,
       recordingActive: false,
       recordingPaused: false,
-      recordingPauseCapable: false,
-      consultCapable: false,
-      transferCapable: false,
-      switchCapable: false,
-      conferenceCapable: false,
-      consultTransferCapable: false,
-      endConsultCapable: false,
-      exitConferenceCapable: false,
-      transferConferenceCapable: false,
       activeLeg: 'main',
       consultActive: false,
       consultStatus: 'none',

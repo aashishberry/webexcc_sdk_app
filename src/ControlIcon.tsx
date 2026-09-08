@@ -17,6 +17,7 @@ type ControlIconName =
   | 'mic'
   | 'activity'
   | 'switch'
+  | 'leave'
   | 'close';
 
 interface ControlIconProps {
@@ -42,6 +43,7 @@ const paths: Record<ControlIconName, React.ReactNode> = {
   mic: <><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></>,
   activity: <><path d="M3 12h4l2.5-7 5 14L17 12h4"/></>,
   switch: <><path d="M5 7h12M14 4l3 3-3 3M19 17H7M10 14l-3 3 3 3"/></>,
+  leave: <><path d="M4 4h9v16H4zM9 12h11M17 8l4 4-4 4"/></>,
   close: <><path d="m6 6 12 12M18 6 6 18"/></>,
 };
 
