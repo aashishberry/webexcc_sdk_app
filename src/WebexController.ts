@@ -563,6 +563,7 @@ export class WebexController {
   private reconciledTaskMessages = new WeakMap<ITask, string>();
   private applicationTranscriptRequests = new Set<string>();
   private postCallSummaryRequestId = '';
+  private wrapupCodeSelectedByAgent = false;
   private aiAssistanceDelayTimer?: ReturnType<typeof globalThis.setTimeout>;
   private aiSummaryDelayTimer?: ReturnType<typeof globalThis.setTimeout>;
   private performanceRefreshTimer?: ReturnType<typeof globalThis.setTimeout>;
@@ -758,6 +759,7 @@ export class WebexController {
   }
 
   selectWrapupCode(codeId: string): void {
+    this.wrapupCodeSelectedByAgent = true;
     this.update({selectedWrapupCode: codeId});
   }
 
@@ -1533,6 +1535,7 @@ export class WebexController {
         error: '',
       });
       this.postCallSummaryRequestId = '';
+      this.wrapupCodeSelectedByAgent = false;
       this.log(`WxCC task offered: ${interactionId}.`, 'success');
       reportBackendEvent('cc.task', 'observed', {state: 'ringing'});
     });
@@ -2232,7 +2235,7 @@ export class WebexController {
         : {
             postCallSummary: summary,
             suggestedWrapupCodeIds,
-            ...(!this.snapshot.selectedWrapupCode && suggestedWrapupCodeIds[0]
+            ...(!this.wrapupCodeSelectedByAgent && suggestedWrapupCodeIds[0]
               ? {selectedWrapupCode: suggestedWrapupCodeIds[0]}
               : {}),
           }),
@@ -2263,6 +2266,7 @@ export class WebexController {
     this.clearAIResponseTimer('assist');
     this.clearAIResponseTimer('summary');
     this.task = undefined;
+    this.wrapupCodeSelectedByAgent = false;
     this.update({
       callStatus: 'none',
       interactionId: '',

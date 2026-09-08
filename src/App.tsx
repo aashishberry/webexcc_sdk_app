@@ -418,6 +418,34 @@ export function App() {
   const activeParticipantCount = displayParticipants.filter(
     (participant) => participant.state !== 'Disconnected',
   ).length;
+  const customerParticipant = displayParticipants.find(
+    (participant) => participant.type === 'Customer',
+  );
+  const consultParticipant = displayParticipants.find(
+    (participant) =>
+      participant.id === snapshot.consultDestinationId ||
+      (
+        !participant.isCurrentAgent &&
+        participant.type !== 'Customer' &&
+        participant.name === snapshot.consultDestinationName
+      ),
+  ) ?? displayParticipants.find(
+    (participant) => !participant.isCurrentAgent && participant.type === 'Agent',
+  );
+  const customerConsultHeld = customerParticipant?.held ?? snapshot.activeLeg === 'consult';
+  const customerConsultState = customerParticipant?.state === 'Disconnected'
+    ? 'Disconnected'
+    : customerConsultHeld
+      ? 'On hold'
+      : 'Connected';
+  const consultDestinationHeld = consultParticipant?.held ?? snapshot.activeLeg === 'main';
+  const consultDestinationState = consultConnecting
+    ? 'Waiting'
+    : consultParticipant?.state === 'Disconnected'
+      ? 'Disconnected'
+      : consultDestinationHeld
+        ? 'On hold'
+        : 'Connected';
   const customerDisconnected = snapshot.conferenceActive && (
     snapshot.customerLeft || displayParticipants.some(
       (participant) => participant.type === 'Customer' && participant.state === 'Disconnected',
@@ -1071,7 +1099,13 @@ export function App() {
                           <div className="consult-heading">
                             <div>
                               <span className="section-kicker">Consultation</span>
-                              <strong>{consultConnecting ? 'Waiting for destination to answer' : 'Private conversation connected'}</strong>
+                              <strong>
+                                {consultConnecting
+                                  ? 'Waiting for destination to answer'
+                                  : snapshot.activeLeg === 'main'
+                                    ? 'Speaking with customer'
+                                    : 'Private conversation connected'}
+                              </strong>
                             </div>
                             <span className={`live-chip ${consultConnecting ? 'is-pending' : ''}`}>
                               <i />{consultConnecting ? 'Connecting' : 'Connected'}
@@ -1080,15 +1114,17 @@ export function App() {
                           <div className="participant-list">
                             <div className="participant-row">
                               <span className="participant-avatar">{snapshot.callerName.charAt(0) || 'C'}</span>
-                              <div><strong>{snapshot.callerName || 'Customer'}</strong><span>{snapshot.callerNumber || 'Contact Center caller'} · On hold</span></div>
-                              <span className="held-chip">Held</span>
+                              <div><strong>{snapshot.callerName || 'Customer'}</strong><span>{snapshot.callerNumber || 'Contact Center caller'} · {customerConsultState}</span></div>
+                              <span className={customerConsultHeld ? 'held-chip' : customerConsultState === 'Connected' ? 'connected-chip' : 'neutral-chip'}>
+                                {customerConsultHeld ? 'Held' : customerConsultState}
+                              </span>
                             </div>
                             <div className="participant-row">
                               <span className="participant-avatar">{snapshot.consultDestinationName.charAt(0) || 'A'}</span>
                               <div>
                                 <strong>{snapshot.consultDestinationName || 'Consult destination'}</strong>
                                 <span>
-                                  {snapshot.consultDestinationType === 'queue' ? 'Consult queue' : 'Consult agent'} · {consultConnecting ? 'Waiting' : 'Connected'}
+                                  {snapshot.consultDestinationType === 'queue' ? 'Consult queue' : 'Consult agent'} · {consultDestinationState}
                                 </span>
                               </div>
                               {consultInitiatedByAgent ? (
@@ -1101,8 +1137,8 @@ export function App() {
                                   <ControlIcon name="phone" /> {consultConnecting ? 'Cancel' : 'Drop'}
                                 </button>
                               ) : (
-                                <span className={consultConnecting ? 'pending-chip' : 'connected-chip'}>
-                                  {consultConnecting ? 'Waiting' : 'Connected'}
+                                <span className={consultConnecting ? 'pending-chip' : consultDestinationHeld ? 'held-chip' : consultDestinationState === 'Connected' ? 'connected-chip' : 'neutral-chip'}>
+                                  {consultDestinationHeld ? 'Held' : consultDestinationState}
                                 </span>
                               )}
                             </div>

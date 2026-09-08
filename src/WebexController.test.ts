@@ -891,13 +891,13 @@ describe('WebexController AI response lifecycle', () => {
       update: (patch: Record<string, unknown>) => void;
     };
     internal.cc = {apiAIAssistant: {sendEvent}};
-    internal.profile = {agentId: 'agent-1', wrapupCodes} as Profile;
+    internal.profile = {agentId: 'agent-1', wrapupCodes, defaultWrapupCode: 'resolved'} as Profile;
     internal.task = task;
     internal.update({
       activeTask: task,
       callStatus: 'connected',
       wrapupCodes,
-      selectedWrapupCode: '',
+      selectedWrapupCode: 'resolved',
     });
     observeTask(controller, task);
 
@@ -927,6 +927,20 @@ describe('WebexController AI response lifecycle', () => {
       postCallSummary: 'Summary: The caller discussed an issue and requested a callback.',
       suggestedWrapupCodeIds: ['discussion', 'callback'],
       selectedWrapupCode: 'discussion',
+    });
+
+    controller.selectWrapupCode('callback');
+    task.emitTest('POST_CALL_SUMMARY', {
+      data: {
+        conversationId: 'interaction-1',
+        sections: {summary: 'An updated summary.'},
+        suggestedWrapUpCodes: [{name: 'Discussion'}],
+      },
+    });
+
+    expect(controller.getSnapshot()).toMatchObject({
+      suggestedWrapupCodeIds: ['discussion'],
+      selectedWrapupCode: 'callback',
     });
   });
 });
