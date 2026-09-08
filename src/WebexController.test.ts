@@ -492,7 +492,7 @@ describe('WebexController task completion', () => {
     (task.data as any).interaction.media['interaction-1'].participants = ['agent-1', 'agent-2'];
     task.emitTest('task:participantLeft');
 
-    expect(controller.getSnapshot()).toMatchObject({customerLeft: true});
+    expect(controller.getSnapshot()).toMatchObject({customerLeft: true, endCapable: false});
     expect(controller.getSnapshot().participants).toEqual([
       expect.objectContaining({id: 'agent-1', state: 'Connected'}),
       expect.objectContaining({id: 'agent-2', state: 'Connected'}),
@@ -513,6 +513,65 @@ describe('WebexController task completion', () => {
     expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
       expect.objectContaining({id: 'customer-1', state: 'Connected'}),
     ]));
+  });
+
+  it('uses ContactEnded participant data to keep an agent-only conference actionable', async () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const internal = controller as unknown as {
+      task: ITask;
+      profile: Profile;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.task = task;
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    internal.update({conferenceActive: true, callStatus: 'connected'});
+    (task.uiControls as any).main.exitConference = {isVisible: true, isEnabled: true};
+    Object.assign((task.data as any), {
+      agentId: 'agent-1',
+      type: 'ParticipantJoinedConference',
+      eventType: 'RoutingMessage',
+      interaction: {
+        owner: 'agent-1',
+        state: 'conference',
+        mainInteractionId: 'interaction-1',
+        participants: {
+          'agent-1': {id: 'agent-1', pType: 'Agent', name: 'Agent One', hasJoined: true},
+          'agent-2': {id: 'agent-2', pType: 'Agent', name: 'Agent Two', hasJoined: true},
+          'customer-1': {id: 'customer-1', pType: 'Customer', name: 'Caller One', hasJoined: true},
+        },
+        media: {
+          'interaction-1': {
+            mediaResourceId: 'interaction-1',
+            mType: 'mainCall',
+            participants: ['agent-1', 'agent-2', 'customer-1'],
+            isHold: false,
+          },
+        },
+      },
+    });
+    observeTask(controller, task);
+    task.emitTest('task:participantJoined');
+
+    (task.data as any).type = 'ContactEnded';
+    (task.data as any).interaction.callProcessingDetails = {hasCustomerLeft: true};
+    (task.data as any).interaction.participants['customer-1'].hasLeft = true;
+    (task.data as any).interaction.media['interaction-1'].participants = ['agent-1', 'agent-2'];
+    task.emitTest('task:ui-controls-updated');
+
+    expect(controller.getSnapshot()).toMatchObject({
+      conferenceActive: true,
+      customerLeft: true,
+      endCapable: false,
+      exitConferenceCapable: true,
+    });
+    expect(controller.getSnapshot().participants).toEqual(expect.arrayContaining([
+      expect.objectContaining({id: 'customer-1', state: 'Disconnected'}),
+      expect.objectContaining({id: 'agent-1', state: 'Connected'}),
+      expect.objectContaining({id: 'agent-2', state: 'Connected'}),
+    ]));
+    await expect(controller.endCall()).rejects.toThrow('End is not available');
+    expect(task.end).not.toHaveBeenCalled();
   });
 
   it('enables wrap-up when task:end reports wrapUpRequired', () => {
@@ -813,6 +872,61 @@ describe('WebexController AI response lifecycle', () => {
       midCallSummary: expect.stringMatching(
         /Additional context: Customer needs a billing correction[\s\S]*Key actions taken:[\s\S]*Reason for transfer or consult:/,
       ),
+    });
+  });
+
+  it('requests post-call summary once on wrap-up and selects the first matching suggestion', async () => {
+    const controller = new WebexController();
+    const task = fakeTask(true);
+    const sendEvent = vi.fn(async () => ({}));
+    const wrapupCodes = [
+      {id: 'discussion', name: 'Discussion', isDefault: false, isSystem: false},
+      {id: 'callback', name: 'Call Back', isDefault: false, isSystem: false},
+      {id: 'resolved', name: 'Resolved', isDefault: false, isSystem: false},
+    ];
+    const internal = controller as unknown as {
+      cc: {apiAIAssistant: {sendEvent: typeof sendEvent}};
+      profile: Profile;
+      task: ITask;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.cc = {apiAIAssistant: {sendEvent}};
+    internal.profile = {agentId: 'agent-1', wrapupCodes} as Profile;
+    internal.task = task;
+    internal.update({
+      activeTask: task,
+      callStatus: 'connected',
+      wrapupCodes,
+      selectedWrapupCode: '',
+    });
+    observeTask(controller, task);
+
+    task.emitTest('task:wrapup');
+    await vi.waitFor(() => expect(sendEvent).toHaveBeenCalledWith(
+      'agent-1',
+      'interaction-1',
+      'CUSTOM_EVENT',
+      'GET_POST_CALL_SUMMARY',
+      {},
+      'en',
+    ));
+    task.emitTest('task:end');
+    expect(sendEvent).toHaveBeenCalledTimes(1);
+
+    task.emitTest('POST_CALL_SUMMARY', {
+      data: {
+        conversationId: 'interaction-1',
+        sections: {summary: 'The caller discussed an issue and requested a callback.'},
+        suggestedWrapUpCodes: [{name: 'Discussion'}, {name: 'Call Back'}],
+      },
+    });
+
+    expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'wrap-up',
+      aiSummaryStatus: 'received',
+      postCallSummary: 'Summary: The caller discussed an issue and requested a callback.',
+      suggestedWrapupCodeIds: ['discussion', 'callback'],
+      selectedWrapupCode: 'discussion',
     });
   });
 });

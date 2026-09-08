@@ -38,4 +38,30 @@ describe('InteractionInsights tab focus', () => {
     rerender(<InteractionInsights {...props} summaryFocusRequest={2} />);
     expect(screen.getByRole('tab', {name: 'Summary'}).getAttribute('aria-selected')).toBe('true');
   });
+
+  it('opens Summary when a post-call summary event adds content', () => {
+    const snapshot = {
+      ...initialSnapshot,
+      interactionId: 'interaction-1',
+      callStatus: 'wrap-up' as const,
+    };
+    const props = {
+      snapshot,
+      controller: {} as WebexController,
+      busy: '',
+      run: vi.fn(async () => undefined),
+      summaryFocusRequest: 0,
+    };
+    const {rerender} = render(<InteractionInsights {...props} />);
+
+    fireEvent.click(screen.getByRole('tab', {name: 'Transcript'}));
+    rerender(
+      <InteractionInsights
+        {...props}
+        snapshot={{...snapshot, postCallSummary: 'The customer requested a callback.'}}
+      />,
+    );
+
+    expect(screen.getByRole('tab', {name: 'Summary'}).getAttribute('aria-selected')).toBe('true');
+  });
 });

@@ -72,6 +72,10 @@ input:focus { border-color: #1170cf; box-shadow: 0 0 0 3px #1170cf20; }
 .select-menu-option.is-active:not(:disabled) { background: light-dark(#edf4f8, #22303b); }
 .select-menu-option.is-selected { color: light-dark(#075da8, #a9d9ff); background: light-dark(#e5f2ff, #153852); font-weight: 760; }
 .select-menu-option.is-selected.is-active { background: light-dark(#d9ecff, #194662); }
+.select-menu-option.is-suggested { box-shadow: inset 3px 0 #7b61d1; }
+.select-option-copy { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.select-option-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.select-option-copy small { flex: 0 0 auto; border-radius: 999px; padding: 2px 6px; color: light-dark(#5943aa, #d3c9ff); background: light-dark(#eeeaff, #302659); font-size: 9px; font-weight: 800; letter-spacing: .02em; }
 .select-menu-option:disabled { color: light-dark(#9ba7ae, #697781); text-decoration: line-through; }
 .option-check { display: grid; place-items: center; width: 19px; height: 19px; flex: 0 0 auto; border-radius: 50%; color: white; background: #1170cf; font-size: 11px; }
 .select-group-label { padding: 9px 11px 5px; color: light-dark(#71808a, #91a0ab); font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }

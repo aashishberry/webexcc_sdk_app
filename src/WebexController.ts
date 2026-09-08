@@ -324,6 +324,28 @@ function aiSummary(payload: any): string {
   return collectAssistantText(payload).find((value) => value.length > 2) ?? '';
 }
 
+function suggestedWrapupCodeNames(value: unknown, depth = 0): string[] {
+  if (depth > 7 || value == null || typeof value !== 'object') return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => suggestedWrapupCodeNames(entry, depth + 1));
+  }
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, entry]) => {
+    if (/^suggestedwrapupcodes$/i.test(key) && Array.isArray(entry)) {
+      return entry.flatMap((candidate) => {
+        if (typeof candidate === 'string') return candidate.trim() ? [candidate.trim()] : [];
+        if (!candidate || typeof candidate !== 'object') return [];
+        const name = firstText((candidate as Record<string, unknown>).name);
+        return name ? [name] : [];
+      });
+    }
+    return suggestedWrapupCodeNames(entry, depth + 1);
+  });
+}
+
+function normalizeWrapupCodeName(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+}
+
 function recordingPauseEnabled(task: ITask): boolean {
   const data = (task.data ?? {}) as unknown as Record<string, any>;
   const activeLeg = task.uiControls?.activeLeg ?? 'main';
@@ -439,6 +461,45 @@ function taskActiveLegHeld(task: ITask): boolean | undefined {
   return undefined;
 }
 
+function taskConferenceFacts(task: ITask): {
+  conferenceActive: boolean;
+  customerPresent: boolean;
+} {
+  const data = (task.data ?? {}) as unknown as Record<string, any>;
+  const interaction = data.interaction ?? {};
+  const participants = interaction.participants ?? {};
+  const mediaEntries = Object.entries(interaction.media ?? {}) as Array<[
+    string,
+    Record<string, any>,
+  ]>;
+  const mainMediaId = firstText(interaction.mainInteractionId, data.interactionId);
+  const mainMedia = mediaEntries.find(([id, entry]) =>
+    (mainMediaId && (id === mainMediaId || entry.mediaResourceId === mainMediaId)) ||
+    entry.mType === 'mainCall',
+  )?.[1];
+  const participantIds = Array.isArray(mainMedia?.participants) ? mainMedia.participants : [];
+  let activeAgentCount = 0;
+  let customerPresent = false;
+
+  for (const participantId of participantIds) {
+    const participant = participants[participantId] as Record<string, any> | undefined;
+    if (!participant) continue;
+    const hasLeft = participant.hasLeft === true || String(participant.hasLeft).toLowerCase() === 'true';
+    if (hasLeft) continue;
+    const participantType = firstText(participant.pType, participant.type).toUpperCase();
+    if (participantType === 'CUSTOMER' || participantType === 'CALLER') {
+      customerPresent = true;
+    } else if (participantType !== 'SUPERVISOR' && participantType !== 'VVA') {
+      activeAgentCount += 1;
+    }
+  }
+
+  return {
+    conferenceActive: activeAgentCount >= 2,
+    customerPresent,
+  };
+}
+
 function taskControlState(task: ITask) {
   const main = task.uiControls?.main;
   const activeLeg = task.uiControls?.activeLeg ?? 'main';
@@ -452,11 +513,16 @@ function taskControlState(task: ITask) {
       // The SDK can throw while its Webex Calling correlation is still settling.
     }
   }
+  const conferenceFacts = taskConferenceFacts(task);
+  const customerLeftConference = conferenceFacts.conferenceActive && !conferenceFacts.customerPresent;
   return {
     acceptCapable: Boolean(main?.accept?.isEnabled),
     declineCapable: Boolean(main?.decline?.isEnabled),
     holdCapable: Boolean(active?.hold?.isEnabled),
-    endCapable: Boolean(active?.end?.isEnabled || main?.end?.isEnabled),
+    // ContactEnded deliberately keeps an agent-only conference alive. Ending that
+    // already-terminated customer leg can never complete; each remaining agent must
+    // leave the conference instead. The interaction participant map is authoritative.
+    endCapable: Boolean(active?.end?.isEnabled || main?.end?.isEnabled) && !customerLeftConference,
     muteCapable: Boolean(active?.mute?.isEnabled),
     dtmfCapable: Boolean(active?.keypad?.isEnabled || correlatedWebexCall),
     recordingPauseCapable: recordingPauseEnabled(task),
@@ -496,6 +562,7 @@ export class WebexController {
   private observedTasks = new WeakSet<ITask>();
   private reconciledTaskMessages = new WeakMap<ITask, string>();
   private applicationTranscriptRequests = new Set<string>();
+  private postCallSummaryRequestId = '';
   private aiAssistanceDelayTimer?: ReturnType<typeof globalThis.setTimeout>;
   private aiSummaryDelayTimer?: ReturnType<typeof globalThis.setTimeout>;
   private performanceRefreshTimer?: ReturnType<typeof globalThis.setTimeout>;
@@ -645,7 +712,8 @@ export class WebexController {
         teams,
         selectedTeamId,
         wrapupCodes: profile.wrapupCodes,
-        selectedWrapupCode: profile.defaultWrapupCode || profile.wrapupCodes[0]?.id || '',
+        selectedWrapupCode: profile.defaultWrapupCode || '',
+        suggestedWrapupCodeIds: [],
         idleCodes,
         selectedIdleCode: recovered.idleCodeId || defaultIdleCode?.id || '',
         stationLoginOption: recovered.deviceType,
@@ -1323,7 +1391,12 @@ export class WebexController {
   }
 
   async endCall(): Promise<void> {
-    if (!this.task || !this.snapshot.endCapable) {
+    const conferenceFacts = this.task ? taskConferenceFacts(this.task) : undefined;
+    if (
+      !this.task ||
+      !this.snapshot.endCapable ||
+      (conferenceFacts?.conferenceActive && !conferenceFacts.customerPresent)
+    ) {
       throw new Error('End is not available for this Contact Center task.');
     }
     reportBackendEvent('cc.webex_call_control', 'started', {action: 'end'});
@@ -1454,9 +1527,12 @@ export class WebexController {
         aiError: '',
         midCallSummary: '',
         postCallSummary: '',
+        selectedWrapupCode: this.profile?.defaultWrapupCode || '',
+        suggestedWrapupCodeIds: [],
         remoteAudioTrack: undefined,
         error: '',
       });
+      this.postCallSummaryRequestId = '';
       this.log(`WxCC task offered: ${interactionId}.`, 'success');
       reportBackendEvent('cc.task', 'observed', {state: 'ringing'});
     });
@@ -1684,7 +1760,10 @@ export class WebexController {
       this.log(message, 'error');
       return;
     }
-    if (type === 'ParticipantLeftConference') {
+    if (
+      type === 'ParticipantLeftConference' ||
+      (type === 'ContactEnded' && taskConferenceFacts(task).conferenceActive)
+    ) {
       this.reconcileParticipantDeparture(task);
     }
   }
@@ -2003,6 +2082,7 @@ export class WebexController {
         wrapupStartedAt: this.snapshot.wrapupStartedAt || startedAt,
       });
       this.log('WxCC task entered wrap-up.');
+      this.requestPostCallSummary(task);
     });
     task.on('task:wrappedup', () => {
       this.stopTranscription(task);
@@ -2024,7 +2104,7 @@ export class WebexController {
           wrapupStartedAt: this.snapshot.wrapupStartedAt || endedAt,
         });
         this.log('WxCC task ended; waiting for wrap-up.');
-        void this.requestSummary('post-call').catch(() => undefined);
+        this.requestPostCallSummary(currentTask);
         return;
       }
 
@@ -2131,16 +2211,43 @@ export class WebexController {
 
   private receiveSummary(kind: 'mid-call' | 'post-call', payload: unknown): void {
     const summary = aiSummary(payload);
-    if (!summary) return;
+    const suggestedNames = kind === 'post-call' ? suggestedWrapupCodeNames(payload) : [];
+    const suggestedWrapupCodeIds = suggestedNames.reduce<string[]>((matches, name) => {
+      const normalizedName = normalizeWrapupCodeName(name);
+      const code = this.snapshot.wrapupCodes.find(
+        (candidate) => normalizeWrapupCodeName(candidate.name) === normalizedName,
+      );
+      if (code && !matches.includes(code.id)) matches.push(code.id);
+      return matches;
+    }, []);
+    if (!summary && !suggestedWrapupCodeIds.length) return;
     this.clearAIResponseTimer('summary');
     this.update({
       aiSummaryLoading: false,
       aiSummaryStatus: 'received',
-      aiSummaryMessage: `${kind === 'mid-call' ? 'Mid-call' : 'Post-call'} summary received.`,
+      aiSummaryMessage: `${kind === 'mid-call' ? 'Mid-call' : 'Post-call'} summary received.${suggestedWrapupCodeIds.length ? ` ${suggestedWrapupCodeIds.length} wrap-up suggestion${suggestedWrapupCodeIds.length === 1 ? '' : 's'} matched.` : ''}`,
       aiError: '',
-      ...(kind === 'mid-call' ? {midCallSummary: summary} : {postCallSummary: summary}),
+      ...(kind === 'mid-call'
+        ? {midCallSummary: summary}
+        : {
+            postCallSummary: summary,
+            suggestedWrapupCodeIds,
+            ...(!this.snapshot.selectedWrapupCode && suggestedWrapupCodeIds[0]
+              ? {selectedWrapupCode: suggestedWrapupCodeIds[0]}
+              : {}),
+          }),
     });
     this.log(`${kind === 'mid-call' ? 'Mid-call' : 'Post-call'} AI summary received.`, 'success');
+  }
+
+  private requestPostCallSummary(task: ITask): void {
+    if (this.task !== task || !this.cc?.apiAIAssistant || !this.profile) return;
+    const interactionId = task.data.interactionId;
+    if (!interactionId || this.postCallSummaryRequestId === interactionId) return;
+    this.postCallSummaryRequestId = interactionId;
+    void this.requestSummary('post-call').catch(() => {
+      if (this.postCallSummaryRequestId === interactionId) this.postCallSummaryRequestId = '';
+    });
   }
 
   private schedulePerformanceRefresh(): void {
@@ -2209,6 +2316,7 @@ export class WebexController {
       aiError: '',
       midCallSummary: '',
       postCallSummary: '',
+      suggestedWrapupCodeIds: [],
       activeTask: undefined,
       remoteAudioTrack: undefined,
     });

@@ -55,4 +55,20 @@ describe('SelectMenu', () => {
 
     expect(onChange).toHaveBeenCalledWith('break');
   });
+
+  it('labels and highlights suggested options', () => {
+    render(
+      <SelectMenu
+        ariaLabel="Wrap-up reason"
+        value=""
+        options={[{value: 'discussion', label: 'Discussion', suggested: true}]}
+        onChange={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('combobox', {name: 'Wrap-up reason'}));
+
+    const option = screen.getByRole('option', {name: 'Discussion, AI suggested'});
+    expect(option.classList.contains('is-suggested')).toBe(true);
+  });
 });

@@ -163,6 +163,7 @@ export interface ControllerSnapshot {
   endpointName: string;
   wrapupCodes: Profile['wrapupCodes'];
   selectedWrapupCode: string;
+  suggestedWrapupCodeIds: string[];
   idleCodes: Profile['idleCodes'];
   selectedIdleCode: string;
   transcripts: TranscriptEntry[];
@@ -264,6 +265,7 @@ export const initialSnapshot: ControllerSnapshot = {
   endpointName: '',
   wrapupCodes: [],
   selectedWrapupCode: '',
+  suggestedWrapupCodeIds: [],
   idleCodes: [],
   selectedIdleCode: '',
   transcripts: [],

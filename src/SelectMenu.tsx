@@ -6,6 +6,7 @@ export interface SelectMenuOption {
   label: string;
   disabled?: boolean;
   group?: string;
+  suggested?: boolean;
 }
 
 interface SelectMenuProps {
@@ -138,13 +139,17 @@ export function SelectMenu({
                   type="button"
                   role="option"
                   aria-selected={isSelected}
+                  aria-label={`${option.label}${option.suggested ? ', AI suggested' : ''}`}
                   disabled={option.disabled}
                   tabIndex={-1}
-                  className={`select-menu-option ${isSelected ? 'is-selected' : ''} ${isActive ? 'is-active' : ''}`}
+                  className={`select-menu-option ${isSelected ? 'is-selected' : ''} ${isActive ? 'is-active' : ''} ${option.suggested ? 'is-suggested' : ''}`}
                   onPointerEnter={() => !option.disabled && setActiveIndex(index)}
                   onClick={() => choose(index)}
                 >
-                  <span>{option.label}</span>
+                  <span className="select-option-copy">
+                    <span>{option.label}</span>
+                    {option.suggested && <small>AI suggested</small>}
+                  </span>
                   {isSelected && <span className="option-check" aria-hidden="true">✓</span>}
                 </button>
               </div>

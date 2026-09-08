@@ -318,6 +318,7 @@ export function App() {
   const wrapupMenuOptions: SelectMenuOption[] = snapshot.wrapupCodes.map((code) => ({
     value: code.id,
     label: code.name,
+    suggested: snapshot.suggestedWrapupCodeIds.includes(code.id),
   }));
   const destinationMenuOptions: SelectMenuOption[] = snapshot.destinations.map((destination) => ({
     value: destination.id,
@@ -1112,7 +1113,7 @@ export function App() {
                       {snapshot.conferenceActive && (
                         <div className="conference-session">
                           <div className="consult-heading">
-                            <div><span className="section-kicker">Conference</span><strong>{customerDisconnected ? 'Customer has left the call' : 'Everyone is connected'}</strong></div>
+                            <div><span className="section-kicker">Conference</span><strong>{customerDisconnected ? 'Customer left' : 'Connected'}</strong></div>
                             <span className="live-chip"><i />{activeParticipantCount} active participants</span>
                           </div>
                           <div className="conference-people" aria-label="Conference participants">
@@ -1134,9 +1135,11 @@ export function App() {
                             })}>
                               Leave conference
                             </button>
-                            <button className="button secondary" disabled={busy !== '' || !snapshot.transferConferenceCapable} onClick={() => void run('transfer-conference', () => controller.transferConference())}>
-                              <ControlIcon name="transfer" /> Hand over conference
-                            </button>
+                            {snapshot.transferConferenceCapable && (
+                              <button className="button secondary" disabled={busy !== ''} onClick={() => void run('transfer-conference', () => controller.transferConference())}>
+                                <ControlIcon name="transfer" /> Hand over conference
+                              </button>
+                            )}
                           </div>
                           {participantsOpen && (
                             <div className="participant-manager">
@@ -1189,7 +1192,13 @@ export function App() {
               <div className="dock-wrapup">
                 <div className="dock-wrapup-copy">
                   <strong>Complete wrap-up</strong>
-                  <span>Select a reason to finish this interaction.</span>
+                  <span>
+                    {snapshot.suggestedWrapupCodeIds.includes(snapshot.selectedWrapupCode)
+                      ? 'AI-suggested reason selected. Review before completing.'
+                      : snapshot.suggestedWrapupCodeIds.length
+                        ? 'AI suggestions are highlighted in the list.'
+                        : 'Select a reason to finish this interaction.'}
+                  </span>
                 </div>
                 <SelectMenu
                   ariaLabel="Wrap-up reason"
@@ -1457,14 +1466,29 @@ export function App() {
                     <small>Transfer</small>
                   </button>
                 </div>
-                <button
-                  className="phone-control decline-call-control end-call-control"
-                  disabled={busy !== '' || !snapshot.endCapable}
-                  onClick={() => run('end', () => controller.endCall())}
-                >
-                  <span><ControlIcon name="phone" /></span>
-                  <small>{busy === 'end' ? 'Ending…' : 'End call'}</small>
-                </button>
+                {customerDisconnected ? (
+                  <button
+                    className="phone-control end-call-control"
+                    disabled={busy !== '' || !snapshot.exitConferenceCapable}
+                    title="The customer has left. Leave the remaining agent conference."
+                    onClick={() => void run('exit-conference', async () => {
+                      await controller.exitConference();
+                      setParticipantsOpen(false);
+                    })}
+                  >
+                    <span><ControlIcon name="phone" /></span>
+                    <small>{busy === 'exit-conference' ? 'Leaving…' : 'Leave conference'}</small>
+                  </button>
+                ) : (
+                  <button
+                    className="phone-control decline-call-control end-call-control"
+                    disabled={busy !== '' || !snapshot.endCapable}
+                    onClick={() => run('end', () => controller.endCall())}
+                  >
+                    <span><ControlIcon name="phone" /></span>
+                    <small>{busy === 'end' ? 'Ending…' : 'End call'}</small>
+                  </button>
+                )}
               </>
             )}
           </section>

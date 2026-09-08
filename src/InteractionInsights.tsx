@@ -322,6 +322,7 @@ export function InteractionInsights(props: InteractionInsightsProps) {
   );
   const previousSummaryFocusRequest = useRef(summaryFocusRequest);
   const previousCallStatus = useRef(snapshot.callStatus);
+  const previousPostCallSummary = useRef(snapshot.postCallSummary);
 
   useEffect(() => {
     if (summaryFocusRequest === previousSummaryFocusRequest.current) return;
@@ -335,6 +336,13 @@ export function InteractionInsights(props: InteractionInsightsProps) {
     previousCallStatus.current = snapshot.callStatus;
     if (isPostCall && !wasPostCall) setTab('summary');
   }, [snapshot.callStatus]);
+
+  useEffect(() => {
+    const receivedPostCallSummary =
+      Boolean(snapshot.postCallSummary) && snapshot.postCallSummary !== previousPostCallSummary.current;
+    previousPostCallSummary.current = snapshot.postCallSummary;
+    if (receivedPostCallSummary) setTab('summary');
+  }, [snapshot.postCallSummary]);
 
   const tabs: Array<{id: InsightTab; label: string; count?: number}> = [
     {id: 'transcript', label: 'Transcript', count: snapshot.transcripts.length},
