@@ -19,6 +19,7 @@ import {ControlIcon} from './ControlIcon';
 import {useCallAlerts} from './useCallAlerts';
 import {useTheme} from './useTheme';
 import {InteractionInsights} from './InteractionInsights';
+import {OutboundDialer} from './OutboundDialer';
 import {clearRecoveryIntent, readRecoveryIntent, saveRecoveryIntent} from './sessionRecovery';
 import type {
   InitializeOptions,
@@ -80,6 +81,7 @@ export function App() {
   >('unchecked');
   const [microphoneName, setMicrophoneName] = useState('System default microphone');
   const [dialpadTaskId, setDialpadTaskId] = useState('');
+  const [outboundOpen, setOutboundOpen] = useState(false);
   const [routeMode, setRouteMode] = useState<'consult' | 'transfer' | ''>('');
   const [routeTaskId, setRouteTaskId] = useState('');
   const [destinationId, setDestinationId] = useState('');
@@ -220,7 +222,7 @@ export function App() {
   const canAnswer = snapshot.callStatus === 'ringing' && snapshot.acceptCapable;
   const canDecline = snapshot.callStatus === 'ringing' && snapshot.declineCapable;
   const callAlerts = useCallAlerts({
-    ringing: snapshot.callStatus === 'ringing',
+    ringing: snapshot.callStatus === 'ringing' && snapshot.callDirection === 'inbound',
     callKey: snapshot.interactionId,
     callerLabel: snapshot.callerNumber || snapshot.callerName,
     canAnswer,
@@ -935,7 +937,7 @@ export function App() {
                         : snapshot.consultActive
                           ? 'Consultation'
                           : hasCall
-                            ? 'Active interaction'
+                            ? snapshot.callDirection === 'outbound' ? 'Outbound interaction' : 'Active interaction'
                             : 'Agent controls'}
                   </h2>
                 </div>
@@ -980,6 +982,22 @@ export function App() {
                       </span>
                     </div>
                   </div>
+
+                  {snapshot.outboundEnabled && (
+                    outboundOpen ? (
+                      <OutboundDialer controller={controller} snapshot={snapshot} onClose={() => setOutboundOpen(false)} />
+                    ) : (
+                      <div className="outbound-entry">
+                        <div>
+                          <strong>Need to reach someone?</strong>
+                          <span>Call a contact or enter a number using your current station.</span>
+                        </div>
+                        <button type="button" className="button primary" disabled={snapshot.outboundRequestPending || busy !== ''} onClick={() => setOutboundOpen(true)}>
+                          <ControlIcon name="dial" />{snapshot.outboundRequestPending ? 'Waiting for call…' : 'New outbound call'}
+                        </button>
+                      </div>
+                    )
+                  )}
 
                   <section className="performance-section" aria-labelledby="performance-title">
                     <div className="performance-heading">
@@ -1043,13 +1061,15 @@ export function App() {
                       <span className="call-state">
                         {customerDisconnected
                           ? 'Customer left'
+                          : snapshot.callDirection === 'outbound' && snapshot.callStatus === 'ringing'
+                            ? 'Outbound setup'
                           : snapshot.conferenceActive
                             ? 'Conference'
                           : snapshot.consultActive
                             ? 'Consultation'
                             : snapshot.callStatus}
                       </span>
-                      <strong>{snapshot.callerName || 'Contact Center caller'}</strong>
+                      <strong>{snapshot.callerName || (snapshot.callDirection === 'outbound' ? 'Outbound customer' : 'Contact Center caller')}</strong>
                       <span>{snapshot.callerNumber || 'Number unavailable'}</span>
                     </div>
                     {snapshot.recordingActive && (
@@ -1098,7 +1118,7 @@ export function App() {
                     <>
                       {snapshot.callStatus === 'ringing' && !canAnswer && (
                         <div className="notice pending-notice station-answer-hint">
-                          Answer this interaction on {stationConnectionLabel.toLowerCase()}.
+                          {snapshot.callDirection === 'outbound' ? 'Connect the outbound leg on ' : 'Answer this interaction on '}{stationConnectionLabel.toLowerCase()}.
                         </div>
                       )}
 
@@ -1264,6 +1284,10 @@ export function App() {
                   {busy === 'wrapup' ? 'Completing…' : 'Complete'}
                 </button>
               </div>
+            ) : snapshot.callDirection === 'outbound' && !canAnswer && !canDecline && ['ringing', 'answering'].includes(snapshot.callStatus) ? (
+              <div className="consult-dock-status" role="status">
+                Waiting for the outbound leg to connect on {stationConnectionLabel.toLowerCase()}.
+              </div>
             ) : ['ringing', 'answering'].includes(snapshot.callStatus) ? (
               <div className="mobile-call-controls incoming-call-controls">
                 <button
@@ -1272,7 +1296,7 @@ export function App() {
                   onClick={() => run('answer', () => controller.answer())}
                 >
                   <span><ControlIcon name="phone" /></span>
-                  <small>{busy === 'answer' ? 'Answering…' : 'Answer'}</small>
+                  <small>{busy === 'answer' ? 'Connecting…' : snapshot.callDirection === 'outbound' ? 'Connect' : 'Answer'}</small>
                 </button>
                 <button
                   className="phone-control decline-call-control"
@@ -1280,7 +1304,7 @@ export function App() {
                   onClick={() => run('decline', () => controller.decline())}
                 >
                   <span><ControlIcon name="phone" /></span>
-                  <small>{busy === 'decline' ? 'Declining…' : 'Decline'}</small>
+                  <small>{busy === 'decline' ? 'Cancelling…' : snapshot.callDirection === 'outbound' ? 'Cancel' : 'Decline'}</small>
                 </button>
               </div>
             ) : consultInitiatedByAgent ? (

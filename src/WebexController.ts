@@ -9,6 +9,8 @@ import {
   type InitializeOptions,
   type LifecycleStatus,
   type LogLevel,
+  type OutboundCallerId,
+  type OutboundContact,
   type AiSuggestion,
   type InteractionContext,
   type InteractionParticipant,
@@ -33,12 +35,21 @@ function errorMessage(error: unknown): string {
 
 function incomingNumber(task: ITask): string {
   const data = (task.data ?? {}) as unknown as Record<string, any>;
+  if (isOutboundTask(task)) {
+    return firstText(data.interaction?.callProcessingDetails?.dnis, data.callProcessingDetails?.dnis, data.destination);
+  }
   return (
     data.callProcessingDetails?.ani ||
     data.interaction?.callProcessingDetails?.ani ||
     data.interaction?.media?.[0]?.ani ||
     ''
   );
+}
+
+function isOutboundTask(task: ITask): boolean {
+  const interaction = (task.data as any)?.interaction;
+  return interaction?.outboundType === 'OUTDIAL' ||
+    (!interaction?.outboundType && interaction?.contactDirection?.type === 'OUTBOUND');
 }
 
 function incomingName(task: ITask): string {
@@ -659,6 +670,7 @@ export class WebexController {
   private cc: any;
   private profile?: Profile;
   private task?: ITask;
+  private pendingOutbound?: {number: string; name: string};
   private logSequence = 0;
   private observedTasks = new WeakSet<ITask>();
   private reconciledTaskMessages = new WeakMap<ITask, string>();
@@ -811,6 +823,11 @@ export class WebexController {
 
       this.update({
         agentName: profile.agentName,
+        outboundEnabled: profile.isOutboundEnabledForAgent === true &&
+          profile.isOutboundEnabledForTenant !== false && Boolean(profile.outDialEp) &&
+          (profile.isAdhocDialingEnabled === true || Boolean(profile.addressBookId)),
+        adhocDialingEnabled: profile.isAdhocDialingEnabled === true,
+        addressBookConfigured: Boolean(profile.addressBookId),
         teams,
         selectedTeamId,
         wrapupCodes: profile.wrapupCodes,
@@ -1024,6 +1041,58 @@ export class WebexController {
     } catch (error) {
       reportBackendEvent('cc.agent_state', 'failed', {state: 'idle'});
       this.fail('Changing agent state failed', error);
+    }
+  }
+
+  async searchOutboundContacts(search = ''): Promise<{
+    contacts: OutboundContact[];
+    totalRecords: number;
+  }> {
+    if (!this.cc || !this.profile?.addressBookId || !this.snapshot.outboundEnabled) {
+      return {contacts: [], totalRecords: 0};
+    }
+    const response = await this.cc.addressBook.getEntries({page: 0, pageSize: 50, search: search.trim() || undefined});
+    return {
+      contacts: (response?.data ?? []).filter((entry: OutboundContact) => entry.number?.trim())
+        .map((entry: OutboundContact) => ({id: entry.id, name: entry.name, number: entry.number})),
+      totalRecords: response?.meta?.totalRecords ?? response?.data?.length ?? 0,
+    };
+  }
+
+  async getOutboundCallerIds(): Promise<OutboundCallerId[]> {
+    if (!this.cc || !this.profile?.outdialANIId || !this.snapshot.outboundEnabled) return [];
+    const entries = await this.cc.getOutdialAniEntries({outdialANI: this.profile.outdialANIId});
+    return (entries ?? []).filter((entry: OutboundCallerId) => entry.number?.trim())
+      .map((entry: OutboundCallerId) => ({id: entry.id, name: entry.name, number: entry.number}));
+  }
+
+  async startOutboundCall(destination: string, origin = '', contact?: OutboundContact): Promise<void> {
+    if (!this.cc || !this.profile || !['station-logged-in', 'available', 'idle'].includes(this.snapshot.lifecycle)) {
+      throw new Error('Sign in to a Contact Center station before placing an outbound call.');
+    }
+    if (!this.snapshot.outboundEnabled) throw new Error('Outbound calling is not enabled for this agent.');
+    if (this.task || this.snapshot.callStatus !== 'none' || this.snapshot.outboundRequestPending) {
+      throw new Error('Finish the current interaction or wait for the pending outbound task before dialing.');
+    }
+    const number = destination.trim();
+    if (!this.snapshot.adhocDialingEnabled && (!contact || contact.number !== number)) {
+      throw new Error('Select a number from the assigned address book. Manual dialing is disabled for this agent.');
+    }
+    if (!/^\+?[0-9][0-9().\s-]{1,34}$/.test(number)) {
+      throw new Error('Enter a valid phone number, preferably in E.164 format.');
+    }
+    this.pendingOutbound = {number, name: contact?.name || ''};
+    this.update({outboundRequestPending: true});
+    reportBackendEvent('cc.outdial', 'started');
+    try {
+      await this.cc.startOutdial(number, origin || undefined);
+      this.log('Outbound request accepted. Waiting for the Contact Center task event.', 'success');
+      reportBackendEvent('cc.outdial', 'succeeded');
+    } catch (error) {
+      this.pendingOutbound = undefined;
+      this.update({outboundRequestPending: false});
+      reportBackendEvent('cc.outdial', 'failed');
+      this.fail('Outbound call failed', error);
     }
   }
 
@@ -1553,6 +1622,7 @@ export class WebexController {
       this.cc = undefined;
       this.profile = undefined;
       this.task = undefined;
+      this.pendingOutbound = undefined;
       this.applicationTranscriptRequests.clear();
       this.snapshot = {...structuredClone(initialSnapshot), timeline: this.snapshot.timeline};
       this.log('Contact Center station and SDK session cleared.', 'success');
@@ -1589,6 +1659,7 @@ export class WebexController {
       const context = interactionContext(task);
       const offeredAt = taskEventAt(task) || Date.now();
       const isConsultOffer = data.isConsulted === true || firstText(data.type) === 'AgentOfferConsult';
+      const outbound = isOutboundTask(task);
       const initiator = consultInitiator(
         task,
         this.profile?.agentId,
@@ -1605,8 +1676,10 @@ export class WebexController {
           : 0,
         wrapupStartedAt: 0,
         callStatus: 'ringing',
-        callerName: incomingName(task),
-        callerNumber: incomingNumber(task),
+        outboundRequestPending: false,
+        callDirection: outbound ? 'outbound' : 'inbound',
+        callerName: incomingName(task) || (outbound ? this.pendingOutbound?.name || '' : ''),
+        callerNumber: incomingNumber(task) || (outbound ? this.pendingOutbound?.number || '' : ''),
         interactionContext: context,
         participants: interactionParticipants(task, this.profile?.agentId),
         customerLeft: false,
@@ -1646,8 +1719,9 @@ export class WebexController {
       });
       this.postCallSummaryRequestId = '';
       this.wrapupCodeSelectedByAgent = false;
-      this.log(`WxCC task offered: ${interactionId}.`, 'success');
-      reportBackendEvent('cc.task', 'observed', {state: 'ringing'});
+      this.pendingOutbound = undefined;
+      this.log(`${outbound ? 'Outbound' : 'Inbound'} WxCC task offered: ${interactionId}.`, 'success');
+      reportBackendEvent('cc.task', 'observed', {state: 'ringing', direction: outbound ? 'outbound' : 'inbound'});
     });
     this.cc.on('task:hydrate', (task: ITask) => {
       this.restoreHydratedTask(task);
@@ -1669,6 +1743,7 @@ export class WebexController {
     const state = String(interaction.state ?? '').toLowerCase();
     const terminated = interaction.isTerminated === true;
     const wrapup = terminated && data.wrapUpRequired === true;
+    const outbound = isOutboundTask(task);
     const callStatus = wrapup
       ? 'wrap-up'
       : terminated
@@ -1738,6 +1813,7 @@ export class WebexController {
         : 0,
       wrapupStartedAt,
       callStatus,
+      callDirection: outbound ? 'outbound' : 'inbound',
       callerName: incomingName(task),
       callerNumber: incomingNumber(task),
       interactionContext: context,
@@ -2046,6 +2122,12 @@ export class WebexController {
     };
     task.on('task:assigned', handleAssigned);
     task.on('task:autoAnswered', handleAssigned);
+    task.on('task:outdialFailed', (reason?: unknown) => {
+      if (this.task !== task || reason === 'AGENT_ENDS') return;
+      const message = `Outbound call failed${typeof reason === 'string' && reason ? `: ${reason}` : '.'}`;
+      this.update({error: message});
+      this.log(message, 'error');
+    });
     task.on('task:offerContact', () => this.syncTaskPresentation(task));
     task.on('task:offerConsult', () => this.syncTaskPresentation(task));
     task.on('task:rejected', (reason?: unknown) => {
@@ -2065,6 +2147,12 @@ export class WebexController {
           );
           this.log('Consult destination did not answer.', 'warning');
         }
+        return;
+      }
+
+      if (isOutboundTask(task)) {
+        this.log('Outbound offer cancelled or rejected.', 'warning');
+        this.clearCallState();
         return;
       }
 
@@ -2449,9 +2537,12 @@ export class WebexController {
     this.clearAIResponseTimer('assist');
     this.clearAIResponseTimer('summary');
     this.task = undefined;
+    this.pendingOutbound = undefined;
     this.wrapupCodeSelectedByAgent = false;
     this.update({
       callStatus: 'none',
+      outboundRequestPending: false,
+      callDirection: 'inbound',
       interactionId: '',
       callStartedAt: 0,
       callEndedAt: 0,

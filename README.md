@@ -23,6 +23,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for component boundaries, sequences, st
 | Browser media | Explicit microphone preflight and remote-audio playback from `task:media` |
 | Agent state | Available and configured non-system Idle reason selection, including next-state selection during an active call |
 | Incoming task | WxCC task events drive the interaction lifecycle |
+| Agent-initiated outbound | Profile-gated manual dialing and SDK address book search; configured outbound ANI selection; `cc.startOutdial()` creates an ordinary task whose controls follow SDK events |
 | Native Webex App controls | Contact Center task UI capabilities and methods drive answer, decline, mute, unmute, and DTMF without browser call-ID matching |
 | Native voice controls | Contact Center task capabilities and methods drive answer, decline, hold, resume, mute, unmute, DTMF, and end without browser call-ID matching or polling |
 | Contact Center controls | Pause/resume recording, consult, transfer, consult transfer, consult end, consult conference, conference exit, and wrap-up |
@@ -135,6 +136,7 @@ npm start
 6. For browser WebRTC, grant microphone access. The SDK uses the system-default microphone and browser audio output.
 7. Complete station login.
 8. Change agent state to Available and handle the interaction with the task controls.
+   If outbound calling is enabled in the agent profile, select New outbound call from the workspace. Choose an address book entry or enter a number when ad-hoc dialing is enabled. Select a configured caller ID if offered, then place the call. A Webex App station may present its own outbound leg to connect or cancel before the customer is reached. Continue with the normal task controls and wrap-up flow.
 9. During a connected call, optionally select the Available or Idle reason that should follow the interaction.
 10. Use Context, Transcript, Assist, and Summary without leaving the active interaction.
 11. Start a consultation; cancel it while a destination queue is still waiting, or after connection switch between call legs, end it, complete the transfer, or merge it into a conference.

@@ -595,6 +595,7 @@ const diagnosticEvents = new Set([
   'cc.station_login',
   'cc.agent_state',
   'cc.task',
+  'cc.outdial',
   'cc.webex_call_control',
   'cc.recording',
   'cc.consult',
@@ -631,6 +632,7 @@ app.post('/api/diagnostics/events', requireSameOrigin, requireSession, (request,
     safeDetails.taskCount = details.taskCount;
   }
   if (diagnosticStates.has(details.state)) safeDetails.state = details.state;
+  if (['inbound', 'outbound'].includes(details.direction)) safeDetails.direction = details.direction;
   if (['BROWSER', 'EXTENSION', 'AGENT_DN'].includes(details.deviceType)) {
     safeDetails.deviceType = details.deviceType;
   }

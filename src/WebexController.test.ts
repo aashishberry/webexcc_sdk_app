@@ -237,6 +237,87 @@ describe('WebexController station login', () => {
   });
 });
 
+describe('WebexController outbound dialing', () => {
+  it('loads assigned address book entries and caller IDs through the SDK', async () => {
+    const controller = new WebexController();
+    const getEntries = vi.fn(async () => ({data: [{id: 'contact-1', name: 'Customer', number: '+14085550100'}], meta: {totalRecords: 1}}));
+    const getOutdialAniEntries = vi.fn(async () => [{id: 'ani-1', name: 'Support', number: '+14085550200'}]);
+    const internal = controller as unknown as {
+      cc: {addressBook: {getEntries: typeof getEntries}; getOutdialAniEntries: typeof getOutdialAniEntries};
+      profile: Profile;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.cc = {addressBook: {getEntries}, getOutdialAniEntries};
+    internal.profile = {addressBookId: 'book-1', outdialANIId: 'ani-list-1'} as Profile;
+    internal.update({outboundEnabled: true});
+
+    expect(await controller.searchOutboundContacts('Customer')).toEqual({
+      contacts: [{id: 'contact-1', name: 'Customer', number: '+14085550100'}], totalRecords: 1,
+    });
+    expect(getEntries).toHaveBeenCalledWith({page: 0, pageSize: 50, search: 'Customer'});
+    expect(await controller.getOutboundCallerIds()).toEqual([{id: 'ani-1', name: 'Support', number: '+14085550200'}]);
+    expect(getOutdialAniEntries).toHaveBeenCalledWith({outdialANI: 'ani-list-1'});
+  });
+
+  it('starts manual outdial and waits for a task event without inventing an active call', async () => {
+    const controller = new WebexController();
+    const startOutdial = vi.fn(async () => ({}));
+    const internal = controller as unknown as {
+      cc: {startOutdial: typeof startOutdial}; profile: Profile;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.cc = {startOutdial};
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    internal.update({lifecycle: 'available', outboundEnabled: true, adhocDialingEnabled: true});
+
+    await controller.startOutboundCall('+14085550100', '+14085550200');
+
+    expect(startOutdial).toHaveBeenCalledWith('+14085550100', '+14085550200');
+    expect(controller.getSnapshot()).toMatchObject({callStatus: 'none', outboundRequestPending: true});
+    await expect(controller.startOutboundCall('+14085550101')).rejects.toThrow('pending outbound task');
+  });
+
+  it('requires an address book selection when ad-hoc dialing is disabled', async () => {
+    const controller = new WebexController();
+    const startOutdial = vi.fn(async () => ({}));
+    const internal = controller as unknown as {
+      cc: {startOutdial: typeof startOutdial}; profile: Profile;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.cc = {startOutdial};
+    internal.profile = {agentId: 'agent-1'} as Profile;
+    internal.update({lifecycle: 'idle', outboundEnabled: true, adhocDialingEnabled: false});
+
+    await expect(controller.startOutboundCall('+14085550100')).rejects.toThrow('address book');
+    await controller.startOutboundCall('+14085550100', '', {id: 'contact-1', name: 'Customer', number: '+14085550100'});
+    expect(startOutdial).toHaveBeenCalledWith('+14085550100', undefined);
+  });
+
+  it('projects outbound offers and cancellations without marking RONA', () => {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const listeners = new Map<string, (...args: any[]) => void>();
+    Object.assign((task.data as any), {
+      interaction: {outboundType: 'OUTDIAL', contactDirection: {type: 'OUTBOUND'}, callProcessingDetails: {dnis: '+14085550100'}, participants: {}, media: {}},
+    });
+    const internal = controller as unknown as {
+      cc: {on: (event: string, listener: (...args: any[]) => void) => void};
+      profile: Profile; attachContactCenterListeners: () => void;
+    };
+    internal.cc = {on: (event, listener) => listeners.set(event, listener)};
+    internal.profile = {agentId: 'agent-1', agentName: 'Agent One'} as Profile;
+    internal.attachContactCenterListeners();
+
+    (controller as unknown as {update: (patch: Record<string, unknown>) => void})
+      .update({outboundRequestPending: true});
+
+    listeners.get('task:incoming')?.(task);
+    expect(controller.getSnapshot()).toMatchObject({callStatus: 'ringing', callDirection: 'outbound', callerNumber: '+14085550100', outboundRequestPending: false});
+    task.emitTest('task:rejected');
+    expect(controller.getSnapshot()).toMatchObject({callStatus: 'none', callDirection: 'inbound'});
+  });
+});
+
 describe('WebexController task completion', () => {
   it('identifies the consulting agent on the consulted agent offer', () => {
     const controller = new WebexController();

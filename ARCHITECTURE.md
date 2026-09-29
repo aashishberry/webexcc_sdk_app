@@ -50,6 +50,7 @@ The Contact Center SDK connects directly from the browser to Webex services, rou
 | Component | Responsibilities |
 |---|---|
 | `App.tsx` | Workflow composition, profile-driven station-mode selection, WebRTC permission and remote-audio binding, responsive lifecycle stage, persistent state control, call-control dock, consult/conference views, banners, theme, alerts, and diagnostics drawer |
+| `OutboundDialer.tsx` | Profile-gated outbound composer with SDK address book search, manual dialing when permitted, and optional outbound ANI selection |
 | `InteractionInsights.tsx` | Primary conversation workspace with transcript lifecycle status and retry, historic/live transcript presentation, real-time AI assistance and feedback, mid-call/post-call summaries, active-session performance statistics, and interaction context |
 | `WebexController.ts` | Contact Center lifecycle, three-mode station login, native task controls, browser media events, interaction context and participant normalization, transcript START/STOP coordination, AI Assistant events, optional performance loading, task state machine, and action coordination |
 | `server.mjs` | OAuth, token refresh, HTTP-only session cookie, Calling configuration proxy, GraphQL Search proxy, diagnostics ingestion, static hosting |
@@ -244,7 +245,7 @@ The controller does not infer the active button from the previous button label o
 
 | SDK event group | Presentation response |
 |---|---|
-| `task:incoming`, `task:offerContact`, `task:offerConsult` | Establish or refresh the offered task and Answer/Decline capabilities |
+| `task:incoming`, `task:offerContact`, `task:offerConsult` | Establish or refresh the offered task and its SDK Answer/Decline capabilities; outbound direction changes labels to Connect/Cancel and suppresses incoming-call alerts |
 | `task:assigned`, `task:autoAnswered` | Enter connected state, start agent-connected timing, and start transcription |
 | `task:ui-controls-updated` | Re-read SDK capability flags only; inspect a new raw `data.type` for SDK event gaps such as initiator-side consult failure |
 | `task:hold`, `task:resume` | Re-read the active leg and authoritative media hold state after backend confirmation |
@@ -255,7 +256,8 @@ The controller does not infer the active button from the previous button label o
 | `task:consultQueueFailed` | Keep the pending consult and report that its cancellation failed |
 | Conference and participant events | Refresh conference mode and use the latest participant/media snapshots as authoritative; never mark every missing or top-level-ID participant as departed |
 | Recording started/paused/resumed and failure events | Refresh recording state and surface operation failure without changing call lifecycle |
-| `task:rejected` on an offered primary task | Enter RONA, stop offer actions, and freeze offer timing |
+| `task:rejected` on an offered primary task | Enter RONA for inbound, or clear a cancelled outbound offer; stop offer actions |
+| `task:outdialFailed` | Surface the SDK failure reason; leave lifecycle cleanup to end and wrap-up events |
 | `task:end`, `task:wrapup`, `task:wrappedup`, `task:unassigned` | Stop media/transcription and enter wrap-up or clear the task as appropriate |
 | `task:media`, multi-login hydration, Webex App mute, transcript, Assist, and summary events | Synchronize remote-session, companion media, and AI presentation without overriding task lifecycle |
 
@@ -278,7 +280,7 @@ The Contact Control request-to-notification matrix used by this controller is:
 
 `type` identifies these notifications. `eventType` identifies the message envelope and must not be used as the call-control discriminator. The SDK owns the transport, request correlation, and state machine. The application uses public task events and `task.uiControls` for control availability; its narrow raw-task inspection exists only to bridge the pinned SDK's missing initiator-side consult-failure emission.
 
-Campaign-preview events and outdial events are outside the current inbound-agent console feature set. Internal cleanup events are left to the SDK; the application responds to the public end, wrapped-up, rejected, and unassigned lifecycle events instead.
+Campaign-preview events remain outside the console feature set. Agent-initiated telephony outdial uses the SDK's `cc.startOutdial(destination, origin)` method. The composer is available only when the registered profile enables outbound for the agent and tenant and supplies an outbound entry point. `cc.addressBook.getEntries()` searches the assigned address book; manual entry is offered only when `isAdhocDialingEnabled` is true. `cc.getOutdialAniEntries()` supplies optional caller-ID choices. If no ANI list is configured, the SDK request omits `origin`; the tenant dial plan determines whether that is accepted and what caller ID is used. The SDK's `task:incoming` event creates the outbound offer, so a successful dial request is not treated as a connected call. Webex App outbound offers use the task's accept/decline capabilities to connect or cancel the agent leg; browser outdial can auto-answer. Outbound tasks then use the same assigned, hold, end, and wrap-up event paths as inbound tasks. The UI distinguishes outbound direction and suppresses the inbound ringtone. Internal cleanup events are left to the SDK; the application responds to the public end, wrapped-up, rejected, outdial-failed, and unassigned lifecycle events instead.
 
 Real-time transcription is a profile-gated companion lifecycle. After assignment, the controller sends an explicit `GET_TRANSCRIPTS` START request through `cc.apiAIAssistant.sendEvent()`. This is a compatibility fallback for task sequences in which the SDK receives a media-fork update but does not issue its automatic start request. Application-originated starts are deduplicated by interaction ID and paired with STOP on task end or wrap-up. The first transcript event establishes the active state; request failures stay within `transcriptionStatus` and do not change call state.
 

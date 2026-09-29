@@ -43,6 +43,18 @@ export interface CallDestination {
   detail?: string;
 }
 
+export interface OutboundContact {
+  id: string;
+  name: string;
+  number: string;
+}
+
+export interface OutboundCallerId {
+  id: string;
+  name: string;
+  number: string;
+}
+
 export interface InteractionContext {
   queueName: string;
   reason: string;
@@ -111,6 +123,11 @@ export type ConsultStatus = 'none' | 'connecting' | 'connected';
 export interface ControllerSnapshot {
   lifecycle: LifecycleStatus;
   callStatus: CallStatus;
+  callDirection: 'inbound' | 'outbound';
+  outboundEnabled: boolean;
+  outboundRequestPending: boolean;
+  adhocDialingEnabled: boolean;
+  addressBookConfigured: boolean;
   agentName: string;
   agentState: string;
   stateChangedAt: number;
@@ -209,6 +226,11 @@ export interface StationLoginOptions {
 export const initialSnapshot: ControllerSnapshot = {
   lifecycle: 'signed-out',
   callStatus: 'none',
+  callDirection: 'inbound',
+  outboundEnabled: false,
+  outboundRequestPending: false,
+  adhocDialingEnabled: false,
+  addressBookConfigured: false,
   agentName: '',
   agentState: 'Signed out',
   stateChangedAt: 0,
