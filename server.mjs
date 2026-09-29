@@ -628,6 +628,9 @@ app.post('/api/diagnostics/events', requireSameOrigin, requireSession, (request,
   if (typeof details.stationRecovered === 'boolean') {
     safeDetails.stationRecovered = details.stationRecovered;
   }
+  if (typeof details.automatic === 'boolean') {
+    safeDetails.automatic = details.automatic;
+  }
   if (Number.isInteger(details.taskCount) && details.taskCount >= 0 && details.taskCount <= 100) {
     safeDetails.taskCount = details.taskCount;
   }

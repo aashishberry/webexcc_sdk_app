@@ -671,6 +671,9 @@ export class WebexController {
   private profile?: Profile;
   private task?: ITask;
   private pendingOutbound?: {number: string; name: string};
+  private autoConnectOutboundTasks = new WeakSet<ITask>();
+  private autoConnectAttemptedTasks = new WeakSet<ITask>();
+  private outboundOffersReady = new WeakSet<ITask>();
   private logSequence = 0;
   private observedTasks = new WeakSet<ITask>();
   private reconciledTaskMessages = new WeakMap<ITask, string>();
@@ -1096,21 +1099,86 @@ export class WebexController {
     }
   }
 
+  private maybeAutoConnectOutbound(task: ITask): void {
+    if (
+      this.task !== task ||
+      !this.autoConnectOutboundTasks.has(task) ||
+      this.autoConnectAttemptedTasks.has(task) ||
+      this.snapshot.callStatus !== 'ringing' ||
+      (task.data as any)?.interaction?.isTerminated === true
+    ) return;
+
+    const browser = this.snapshot.stationLoginOption === 'BROWSER';
+    if (browser) {
+      // The SDK already auto-accepts eligible WebRTC outdial tasks. Its task data
+      // becomes false if that attempt fails, allowing this guarded fallback.
+      if (!this.outboundOffersReady.has(task) || (task.data as any)?.isAutoAnswering === true) return;
+    } else if (
+      this.snapshot.stationLoginOption !== 'EXTENSION' ||
+      !taskControlState(task).acceptCapable
+    ) {
+      // Webex App device correlation can arrive after task:incoming. The SDK
+      // advertises Accept only when it has an answerable device call.
+      return;
+    }
+
+    this.autoConnectAttemptedTasks.add(task);
+    this.log(`Automatically connecting the outbound ${browser ? 'browser' : 'Webex App'} leg.`);
+    void this.acceptTask(task, true, browser).catch(() => undefined);
+  }
+
   async answer(): Promise<void> {
     if (!this.task || !this.snapshot.acceptCapable) {
       throw new Error('The Contact Center task is not ready to be answered on this station.');
     }
-    this.update({callStatus: 'answering', error: ''});
-    reportBackendEvent('cc.webex_call_control', 'started', {action: 'accept'});
+    await this.acceptTask(this.task);
+  }
+
+  async retryOutboundConnection(): Promise<void> {
+    if (
+      !this.task ||
+      this.snapshot.callDirection !== 'outbound' ||
+      this.snapshot.stationLoginOption !== 'BROWSER' ||
+      this.snapshot.callStatus !== 'ringing' ||
+      !this.snapshot.outboundConnectRetryCapable
+    ) {
+      throw new Error('The outbound browser offer is not ready to retry.');
+    }
+    await this.acceptTask(this.task, false, true);
+  }
+
+  private async acceptTask(task: ITask, automatic = false, browserOutdialFallback = false): Promise<void> {
+    if (
+      this.task !== task ||
+      this.snapshot.callStatus !== 'ringing' ||
+      (!browserOutdialFallback && !this.snapshot.acceptCapable)
+    ) {
+      throw new Error('The Contact Center task is no longer ready to be answered.');
+    }
+    this.update({callStatus: 'answering', outboundConnectRetryCapable: false, error: ''});
+    reportBackendEvent('cc.webex_call_control', 'started', {action: 'accept', automatic});
     try {
-      await this.task.accept();
-      this.update({...taskControlState(this.task)});
-      this.log('Call accepted through the Contact Center SDK.', 'success');
-      reportBackendEvent('cc.webex_call_control', 'succeeded', {action: 'accept'});
+      await task.accept();
+      if (this.task === task) this.update({...taskControlState(task)});
+      this.log(`${automatic ? 'Outbound agent leg automatically accepted' : 'Call accepted'} through the Contact Center SDK.`, 'success');
+      reportBackendEvent('cc.webex_call_control', 'succeeded', {action: 'accept', automatic});
     } catch (error) {
-      this.update({callStatus: 'ringing', ...taskControlState(this.task)});
-      reportBackendEvent('cc.webex_call_control', 'failed', {action: 'accept'});
-      this.fail('Answer failed', error);
+      if (this.task === task && this.getSnapshot().callStatus === 'answering') {
+        this.update({
+          callStatus: 'ringing',
+          outboundConnectRetryCapable: browserOutdialFallback,
+          ...taskControlState(task),
+        });
+      }
+      reportBackendEvent('cc.webex_call_control', 'failed', {action: 'accept', automatic});
+      this.fail(
+        automatic
+          ? browserOutdialFallback
+            ? 'Automatic browser connection failed; check microphone access and retry'
+            : 'Automatic Webex App connection failed; connect manually'
+          : 'Answer failed',
+        error,
+      );
     }
   }
 
@@ -1660,6 +1728,17 @@ export class WebexController {
       const offeredAt = taskEventAt(task) || Date.now();
       const isConsultOffer = data.isConsulted === true || firstText(data.type) === 'AgentOfferConsult';
       const outbound = isOutboundTask(task);
+      const outdialAgentId = firstText(data.interaction?.callProcessingDetails?.outdialAgentId);
+      if (
+        outbound &&
+        this.pendingOutbound &&
+        ['EXTENSION', 'BROWSER'].includes(this.snapshot.stationLoginOption) &&
+        (!outdialAgentId || outdialAgentId === this.profile?.agentId)
+      ) {
+        // Only this tab's newly initiated outdial may be auto-connected. A
+        // restored task or an offer initiated from another session is excluded.
+        this.autoConnectOutboundTasks.add(task);
+      }
       const initiator = consultInitiator(
         task,
         this.profile?.agentId,
@@ -1676,6 +1755,7 @@ export class WebexController {
           : 0,
         wrapupStartedAt: 0,
         callStatus: 'ringing',
+        outboundConnectRetryCapable: false,
         outboundRequestPending: false,
         callDirection: outbound ? 'outbound' : 'inbound',
         callerName: incomingName(task) || (outbound ? this.pendingOutbound?.name || '' : ''),
@@ -1722,6 +1802,7 @@ export class WebexController {
       this.pendingOutbound = undefined;
       this.log(`${outbound ? 'Outbound' : 'Inbound'} WxCC task offered: ${interactionId}.`, 'success');
       reportBackendEvent('cc.task', 'observed', {state: 'ringing', direction: outbound ? 'outbound' : 'inbound'});
+      this.maybeAutoConnectOutbound(task);
     });
     this.cc.on('task:hydrate', (task: ITask) => {
       this.restoreHydratedTask(task);
@@ -1813,6 +1894,7 @@ export class WebexController {
         : 0,
       wrapupStartedAt,
       callStatus,
+      outboundConnectRetryCapable: false,
       callDirection: outbound ? 'outbound' : 'inbound',
       callerName: incomingName(task),
       callerNumber: incomingNumber(task),
@@ -2095,6 +2177,7 @@ export class WebexController {
         // reconciled by the corresponding confirmed task event below.
         this.update(taskControlState(task));
         this.reconcileRawTaskMessage(task);
+        this.maybeAutoConnectOutbound(task);
       }
     });
     task.on('task:wxapp-mute-state-updated', (event: {muted?: boolean}) => {
@@ -2121,14 +2204,25 @@ export class WebexController {
       void this.startTranscription().catch(() => undefined);
     };
     task.on('task:assigned', handleAssigned);
-    task.on('task:autoAnswered', handleAssigned);
+    task.on('task:autoAnswered', () => {
+      if (this.task !== task) return;
+      this.autoConnectAttemptedTasks.add(task);
+      if (this.snapshot.callStatus === 'ringing') {
+        this.update({callStatus: 'answering', ...taskControlState(task)});
+        this.log('SDK auto-answer completed; waiting for Contact Center assignment.');
+      }
+    });
     task.on('task:outdialFailed', (reason?: unknown) => {
       if (this.task !== task || reason === 'AGENT_ENDS') return;
       const message = `Outbound call failed${typeof reason === 'string' && reason ? `: ${reason}` : '.'}`;
       this.update({error: message});
       this.log(message, 'error');
     });
-    task.on('task:offerContact', () => this.syncTaskPresentation(task));
+    task.on('task:offerContact', () => {
+      this.outboundOffersReady.add(task);
+      this.syncTaskPresentation(task);
+      this.maybeAutoConnectOutbound(task);
+    });
     task.on('task:offerConsult', () => this.syncTaskPresentation(task));
     task.on('task:rejected', (reason?: unknown) => {
       if (this.task !== task) return;
@@ -2541,6 +2635,7 @@ export class WebexController {
     this.wrapupCodeSelectedByAgent = false;
     this.update({
       callStatus: 'none',
+      outboundConnectRetryCapable: false,
       outboundRequestPending: false,
       callDirection: 'inbound',
       interactionId: '',

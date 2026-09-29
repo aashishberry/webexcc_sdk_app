@@ -1284,6 +1284,13 @@ export function App() {
                   {busy === 'wrapup' ? 'Completing…' : 'Complete'}
                 </button>
               </div>
+            ) : snapshot.outboundConnectRetryCapable && snapshot.callStatus === 'ringing' ? (
+              <div className="outbound-retry-control" role="alert">
+                <span>Browser audio did not connect. Check microphone access, then retry.</span>
+                <button className="button primary" disabled={busy !== ''} onClick={() => run('retry-outbound', () => controller.retryOutboundConnection())}>
+                  {busy === 'retry-outbound' ? 'Connecting…' : 'Retry connect'}
+                </button>
+              </div>
             ) : snapshot.callDirection === 'outbound' && !canAnswer && !canDecline && ['ringing', 'answering'].includes(snapshot.callStatus) ? (
               <div className="consult-dock-status" role="status">
                 Waiting for the outbound leg to connect on {stationConnectionLabel.toLowerCase()}.

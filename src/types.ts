@@ -126,6 +126,7 @@ export interface ControllerSnapshot {
   callDirection: 'inbound' | 'outbound';
   outboundEnabled: boolean;
   outboundRequestPending: boolean;
+  outboundConnectRetryCapable: boolean;
   adhocDialingEnabled: boolean;
   addressBookConfigured: boolean;
   agentName: string;
@@ -229,6 +230,7 @@ export const initialSnapshot: ControllerSnapshot = {
   callDirection: 'inbound',
   outboundEnabled: false,
   outboundRequestPending: false,
+  outboundConnectRetryCapable: false,
   adhocDialingEnabled: false,
   addressBookConfigured: false,
   agentName: '',

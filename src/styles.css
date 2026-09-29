@@ -545,6 +545,9 @@ button, input, textarea { font: inherit; }
 .call-control-dock .consult-dock-controls { grid-template-columns: repeat(auto-fit, minmax(82px, 1fr)); }
 .call-control-dock .conference-dock-controls { grid-template-columns: repeat(auto-fit, minmax(74px, 1fr)); }
 .consult-dock-status { width: min(680px, 100%); border: 1px solid light-dark(#e3c780, #6f5723); border-radius: 11px; padding: 13px 16px; color: light-dark(#78520b, #efd080); background: light-dark(#fff7df, #332814); text-align: center; font-size: 11px; font-weight: 680; }
+.outbound-retry-control { width: min(680px, 100%); display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid light-dark(#e3c780, #6f5723); border-radius: 11px; padding: 10px 12px; color: light-dark(#78520b, #efd080); background: light-dark(#fff7df, #332814); font-size: 11px; font-weight: 680; }
+.outbound-retry-control .button { flex: 0 0 auto; }
+@media (max-width: 600px) { .outbound-retry-control { align-items: stretch; flex-direction: column; text-align: center; } }
 .conference-control { color: light-dark(#126b84, #8de4f3); }
 .transfer-control { color: light-dark(#155f9a, #8bc6fa); }
 .leave-conference-control {

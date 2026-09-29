@@ -238,6 +238,148 @@ describe('WebexController station login', () => {
 });
 
 describe('WebexController outbound dialing', () => {
+  function offeredOutdial(options: {station: 'EXTENSION' | 'BROWSER' | 'AGENT_DN'; sdkAutoAnswer?: boolean; acceptEnabled?: boolean; local?: boolean}) {
+    const controller = new WebexController();
+    const task = fakeTask(false);
+    const listeners = new Map<string, (...args: any[]) => void>();
+    Object.assign((task.data as any), {
+      isAutoAnswering: options.sdkAutoAnswer ?? false,
+      interaction: {
+        state: 'new',
+        outboundType: 'OUTDIAL',
+        contactDirection: {type: 'OUTBOUND'},
+        callProcessingDetails: {dnis: '+14085550100', outdialAgentId: 'agent-1'},
+        participants: {}, media: {},
+      },
+    });
+    task.uiControls.main.accept.isEnabled = options.acceptEnabled ?? true;
+    const internal = controller as unknown as {
+      cc: {on: (event: string, listener: (...args: any[]) => void) => void};
+      profile: Profile;
+      pendingOutbound?: {number: string; name: string};
+      attachContactCenterListeners: () => void;
+      update: (patch: Record<string, unknown>) => void;
+    };
+    internal.cc = {on: (event, listener) => listeners.set(event, listener)};
+    internal.profile = {agentId: 'agent-1', agentName: 'Agent One'} as Profile;
+    internal.pendingOutbound = options.local === false ? undefined : {number: '+14085550100', name: 'Customer'};
+    internal.update({stationLoginOption: options.station});
+    internal.attachContactCenterListeners();
+    return {controller, task, incoming: () => listeners.get('task:incoming')?.(task)};
+  }
+
+  it('auto-accepts a local Webex App outdial once the SDK enables Accept', async () => {
+    const {controller, task, incoming} = offeredOutdial({station: 'EXTENSION', acceptEnabled: false});
+    incoming();
+    expect(task.accept).not.toHaveBeenCalled();
+
+    task.uiControls.main.accept.isEnabled = true;
+    task.emitTest('task:ui-controls-updated');
+    await vi.waitFor(() => expect(task.accept).toHaveBeenCalledOnce());
+    expect(controller.getSnapshot().callStatus).toBe('answering');
+
+    task.emitTest('task:assigned');
+    task.emitTest('task:ui-controls-updated');
+    expect(controller.getSnapshot().callStatus).toBe('connected');
+    expect(task.accept).toHaveBeenCalledOnce();
+  });
+
+  it('auto-accepts an already-answerable local Webex App offer on task:incoming', async () => {
+    const {task, incoming} = offeredOutdial({station: 'EXTENSION'});
+    incoming();
+    await vi.waitFor(() => expect(task.accept).toHaveBeenCalledOnce());
+  });
+
+  it('lets the SDK own browser auto-answer when it selected that path', () => {
+    const {controller, task, incoming} = offeredOutdial({station: 'BROWSER', sdkAutoAnswer: true, acceptEnabled: false});
+    incoming();
+    task.emitTest('task:offerContact');
+
+    expect(task.accept).not.toHaveBeenCalled();
+    task.emitTest('task:autoAnswered');
+    expect(controller.getSnapshot().callStatus).toBe('answering');
+    task.emitTest('task:assigned');
+    expect(controller.getSnapshot().callStatus).toBe('connected');
+  });
+
+  it('auto-accepts a local browser outdial when the SDK did not select auto-answer', async () => {
+    const {controller, task, incoming} = offeredOutdial({station: 'BROWSER', sdkAutoAnswer: false, acceptEnabled: false});
+    incoming();
+    expect(task.accept).not.toHaveBeenCalled();
+    task.emitTest('task:offerContact');
+
+    await vi.waitFor(() => expect(task.accept).toHaveBeenCalledOnce());
+    expect(controller.getSnapshot().callStatus).toBe('answering');
+    task.emitTest('task:assigned');
+    expect(controller.getSnapshot().callStatus).toBe('connected');
+  });
+
+  it('falls back when the SDK browser auto-answer attempt resets its flag', async () => {
+    const {task, incoming} = offeredOutdial({station: 'BROWSER', sdkAutoAnswer: true, acceptEnabled: false});
+    incoming();
+    task.emitTest('task:offerContact');
+    expect(task.accept).not.toHaveBeenCalled();
+
+    (task.data as any).isAutoAnswering = false;
+    task.emitTest('task:ui-controls-updated');
+    await vi.waitFor(() => expect(task.accept).toHaveBeenCalledOnce());
+  });
+
+  it('offers a browser retry when the guarded auto-connect fails', async () => {
+    const {controller, task, incoming} = offeredOutdial({station: 'BROWSER', sdkAutoAnswer: false, acceptEnabled: false});
+    task.accept.mockRejectedValueOnce(new Error('Microphone blocked'));
+    incoming();
+    task.emitTest('task:offerContact');
+
+    await vi.waitFor(() => expect(controller.getSnapshot()).toMatchObject({
+      callStatus: 'ringing', outboundConnectRetryCapable: true,
+    }));
+    await controller.retryOutboundConnection();
+    expect(task.accept).toHaveBeenCalledTimes(2);
+    expect(controller.getSnapshot()).toMatchObject({callStatus: 'answering', outboundConnectRetryCapable: false});
+  });
+
+  it('never auto-accepts an inbound offer', () => {
+    const {task, incoming} = offeredOutdial({station: 'EXTENSION'});
+    (task.data as any).interaction.outboundType = undefined;
+    (task.data as any).interaction.contactDirection.type = 'INBOUND';
+    incoming();
+    task.emitTest('task:ui-controls-updated');
+    expect(task.accept).not.toHaveBeenCalled();
+  });
+
+  it('does not auto-accept an outdial attributed to a different agent', () => {
+    const {task, incoming} = offeredOutdial({station: 'EXTENSION'});
+    (task.data as any).interaction.callProcessingDetails.outdialAgentId = 'agent-2';
+    incoming();
+    task.emitTest('task:ui-controls-updated');
+    expect(task.accept).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {station: 'AGENT_DN' as const, local: true},
+    {station: 'EXTENSION' as const, local: false},
+  ])('does not auto-accept a $station offer when local eligibility is $local', ({station, local}) => {
+    const {task, incoming} = offeredOutdial({station, local});
+    incoming();
+    task.emitTest('task:offerContact');
+    task.emitTest('task:ui-controls-updated');
+    expect(task.accept).not.toHaveBeenCalled();
+  });
+
+  it('keeps Webex App Connect available when automatic acceptance fails', async () => {
+    const {controller, task, incoming} = offeredOutdial({station: 'EXTENSION'});
+    task.accept.mockRejectedValueOnce(new Error('Device not ready'));
+    incoming();
+
+    await vi.waitFor(() => expect(controller.getSnapshot().error).toContain('Device not ready'));
+    expect(controller.getSnapshot()).toMatchObject({callStatus: 'ringing', acceptCapable: true});
+    task.emitTest('task:ui-controls-updated');
+    expect(task.accept).toHaveBeenCalledOnce();
+    await controller.answer();
+    expect(task.accept).toHaveBeenCalledTimes(2);
+  });
+
   it('loads assigned address book entries and caller IDs through the SDK', async () => {
     const controller = new WebexController();
     const getEntries = vi.fn(async () => ({data: [{id: 'contact-1', name: 'Customer', number: '+14085550100'}], meta: {totalRecords: 1}}));

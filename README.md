@@ -136,7 +136,7 @@ npm start
 6. For browser WebRTC, grant microphone access. The SDK uses the system-default microphone and browser audio output.
 7. Complete station login.
 8. Change agent state to Available and handle the interaction with the task controls.
-   If outbound calling is enabled in the agent profile, select New outbound call from the workspace. Choose an address book entry or enter a number when ad-hoc dialing is enabled. Select a configured caller ID if offered, then place the call. A Webex App station may present its own outbound leg to connect or cancel before the customer is reached. Continue with the normal task controls and wrap-up flow.
+   If outbound calling is enabled in the agent profile, select New outbound call from the workspace. Choose an address book entry or enter a number when ad-hoc dialing is enabled. Select a configured caller ID if offered, then place the call. On Webex App and browser stations, the agent leg connects automatically; Dial Number retains its normal external-phone behavior. If automatic browser connection fails, check microphone access and use Retry connect. Continue with the normal task controls and wrap-up flow.
 9. During a connected call, optionally select the Available or Idle reason that should follow the interaction.
 10. Use Context, Transcript, Assist, and Summary without leaving the active interaction.
 11. Start a consultation; cancel it while a destination queue is still waiting, or after connection switch between call legs, end it, complete the transfer, or merge it into a conference.
